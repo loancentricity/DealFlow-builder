@@ -114,8 +114,8 @@
           <div class="owner-layout">
             <section class="brief-panel">
               <div class="brief-heading"><span class="eyebrow">YOU DESCRIBE. WE BUILD.</span><h2>What should we make?</h2><p>Tell us the audience, the look, and what people should be able to do.</p></div>
-              <form id="build-form"><label for="build-prompt">What would you like to build?</label><textarea id="build-prompt" maxlength="12000" placeholder="A warm, minimal website for my neighborhood coffee shop. Include our menu, opening hours, and a welcoming homepage." required></textarea><button class="primary full" id="request-build">Build my idea <span aria-hidden="true">↗</span></button></form>
-              <p class="build-scope">Static websites for now. Describe changes here anytime.</p>
+              <form id="build-form"><label for="build-prompt">What would you like to build?</label><textarea id="build-prompt" maxlength="60000" aria-describedby="build-prompt-help" placeholder="A warm, minimal website for my neighborhood coffee shop. Include our menu, opening hours, and a welcoming homepage." required></textarea><button class="primary full" id="request-build">Build my idea <span aria-hidden="true">↗</span></button></form>
+              <p class="build-scope" id="build-prompt-help">Up to 60,000 characters. Static websites for now.</p>
               <div class="builder-availability"><span class="status-dot" id="builder-dot"></span><div><strong id="builder-status">Checking builder…</strong><p id="builder-reason"></p></div></div>
               <section id="build-current" class="build-current" aria-live="polite" hidden></section>
               <div class="history-heading"><h3>Your requests</h3><span>Saved with this project</span></div><div id="build-history"><p class="muted">Your first idea starts here.</p></div>
@@ -269,7 +269,7 @@
           placeholder="My next project"
           autocomplete="off"
         />
-        <label for="project-brief">What would you like to build? <span class="muted">(optional)</span></label><textarea id="project-brief" maxlength="12000" placeholder="Describe your website, who it is for, and the feel you want."></textarea>
+        <label for="project-brief">What would you like to build? <span class="muted">(optional)</span></label><textarea id="project-brief" maxlength="60000" aria-describedby="project-brief-help" placeholder="Describe your website, who it is for, and the feel you want."></textarea><p class="build-scope" id="project-brief-help">Up to 60,000 characters.</p>
         <div class="template-choice">
           <span aria-hidden="true">&lt;/&gt;</span>
           <div>

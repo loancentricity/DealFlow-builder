@@ -58,8 +58,8 @@ test('real PostgreSQL build queue authenticates workers, reviews candidates, pro
   assert.equal((await request(`${internal}/claim`,{})).status,401);
   assert.equal((await request(`${internal}/heartbeat`,{name:'Synthetic test worker',ready:true},true)).status,200);
   assert.equal((await request('/api/agent',undefined,false,'GET')).data.available,true);
-  const create = async () => {
-    const result = await request(builds,{prompt:'Test fixture only: update starter heading.'});
+  const create = async (prompt = 'Test fixture only: update starter heading.') => {
+    const result = await request(builds,{prompt});
     assert.equal(result.status,201); return result.data.build;
   };
   const claim = async () => (await request(`${internal}/claim`,{},true)).data.build;
@@ -70,7 +70,9 @@ test('real PostgreSQL build queue authenticates workers, reviews candidates, pro
     review:{approved:true,summary:'Test fixture review decision.'},...extra,
   },true);
 
-  const queued = await create();
+  assert.equal((await request(builds,{prompt:'x'.repeat(60001)})).status,400);
+  const queued = await create('x'.repeat(60000));
+  assert.equal(queued.prompt.length,60000);
   assert.equal((await request(builds,{prompt:'Duplicate active build'})).status,409);
   const claimed = await claim();
   assert.equal(claimed.id,queued.id);

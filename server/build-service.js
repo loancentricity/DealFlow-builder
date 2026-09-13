@@ -126,7 +126,7 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
     if(!buildId && req.method === "GET") { json(res,200,{builds:await list(projectId)}); return true; }
     if(req.method !== "POST") throw invalid("Method not allowed.",405);
     if(!buildId) {
-      const prompt=text((await readJson(req)).prompt,6000,"Build prompt");
+      const prompt=text((await readJson(req)).prompt,60000,"Build prompt");
       const agent=await status(); if(!agent.available) throw invalid(agent.reason,503);
       const build=await tx(async c => {
         await lockProject(c,projectId);
