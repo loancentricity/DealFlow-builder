@@ -58,3 +58,39 @@ jobs:
           name: browser-results
           path: test-results/
           if-no-files-found: ignore
+  containers:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_USER: dealflow_container_test
+      POSTGRES_PASSWORD: disposable_container_test_only
+      POSTGRES_DB: dealflow_container_test
+      PREVIEW_WORKER_TOKEN: disposable-container-worker-token-not-for-deployment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Build and start isolated containers
+        run: |
+          docker compose up --build --detach
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker compose logs
+          exit 1
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-browser-results
+          path: test-results/
+          if-no-files-found: ignore
+      - name: Container logs and cleanup
+        if: always()
+        run: |
+          docker compose logs
+          docker compose down --volumes

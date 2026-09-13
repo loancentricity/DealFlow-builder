@@ -9,3 +9,10 @@ coverage
 work
 outputs
 *.log
+.dealflow
+data
+*.pem
+*.key
+*.sqlite*
+*.db*
+*.zip

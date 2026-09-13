@@ -19,6 +19,7 @@ Environment: Node 24.19.0 on Windows; native PostgreSQL 18.4 bound to loopback f
 | Check | Actual result |
 | --- | --- |
 | `npm install` | Passed; lockfile generated; 0 dependency vulnerabilities reported at installation |
+| `npm ci` | Passed locally and in GitHub CI |
 | `npm run build` | Passed (JavaScript syntax checks; this application has no bundle compilation step) |
 | `node server/migrate.js` with `DATABASE_URL` set | Passed against native PostgreSQL; repeated by integration tests |
 | `npm test` | 8 passed, 0 failed, 0 skipped against PostgreSQL |
@@ -28,7 +29,7 @@ Environment: Node 24.19.0 on Windows; native PostgreSQL 18.4 bound to loopback f
 | Stop verification | The old browser preview URL returned HTTP 404 after Stop |
 | Desktop/mobile visual review | Actual screenshots captured at desktop width and 390px mobile; mobile document width 375px within 390px viewport; no horizontal page overflow; preview interaction verified on mobile |
 | Docker Compose | Configuration implemented, execution unverified: Docker is not installed in this environment |
-| GitHub Actions | Workflow provided; status must be checked on the review branch, not inferred from local tests |
+| GitHub Actions | Run 34786766878 passed dependency install, syntax checks, PostgreSQL 17 migration/integration tests, and the full Playwright browser suite. A separate container startup/browser job is now configured; its result must be checked on the latest review commit. |
 
 Screenshots accompany the task deliverables. They contain only a synthetic starter project. A separate frontend agent implemented the UI, a documentation agent prepared standing requirements/container configuration, and a QA agent supplied tests and review; the lead integrated and verified the result.
 
