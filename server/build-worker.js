@@ -36,7 +36,8 @@ export function createOpenAIProvider({ apiKey, baseUrl = "https://api.openai.com
   }
   async function structured(instructions, input, schema, name) {
     const response = await request("/responses", {
-      model, store: false, tools: [], max_output_tokens: 16000,
+      model, store: false, tools: [], max_output_tokens: 24000,
+      reasoning: { effort: "low" },
       instructions, input: JSON.stringify(input),
       text: { format: { type: "json_schema", name, strict: true, schema } },
     });
