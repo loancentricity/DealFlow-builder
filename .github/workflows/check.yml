@@ -1,0 +1,60 @@
+name: Checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: dealflow_test
+          POSTGRES_PASSWORD: disposable_ci_only
+          POSTGRES_DB: dealflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dealflow_test -d dealflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://dealflow_test:disposable_ci_only@127.0.0.1:5432/dealflow_test
+      PREVIEW_WORKER_TOKEN: disposable-ci-worker-token-not-for-deployment
+      PREVIEW_WORKER_URL: http://127.0.0.1:3001
+      PREVIEW_PUBLIC_URL: http://127.0.0.1:3001
+      PREVIEW_HOST: 127.0.0.1
+      PREVIEW_PORT: "3001"
+      HOST: 127.0.0.1
+      PORT: "3000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run migrate
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - name: Start local services
+        run: |
+          node server/preview-worker.js > /tmp/dealflow-preview.log 2>&1 &
+          npm start > /tmp/dealflow-app.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/dealflow-app.log /tmp/dealflow-preview.log
+          exit 1
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-results
+          path: test-results/
+          if-no-files-found: ignore
