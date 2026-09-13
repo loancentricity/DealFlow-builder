@@ -2,13 +2,15 @@
 
 Scope: early local, single-owner development increments. The full platform remains incomplete; owner acceptance is pending.
 
-## Second increment — implemented; live generation blocked by API quota
+## Second increment — real generation and candidate preview verified
 
 The owner journey now starts with a plain-language request and emphasizes preview review with Keep/Discard; Code and technical checks are optional. A separate build-worker process uses the Responses API for generation and an independent source-review pass, with one correction attempt. It does not execute browser tests or generated server code. `OPENAI_API_KEY` belongs only to the build worker; its control-plane API uses a separate `BUILD_WORKER_TOKEN`.
 
 Migration `002_builds.sql` adds durable build requests, captured source/version maps, candidate source, review/check results, leases, and worker availability. The API enforces one active build per project, heartbeat availability, authenticated claims, stale-lease rejection, and ten-minute running-job expiry. Keep checks the entire captured version map atomically, preserves omitted source paths, and is idempotent. Discard preserves saved source and revokes only the candidate preview. Structure checks are computed by the control plane rather than trusted from the worker.
 
-Migration 002 and the nine PostgreSQL/domain/security/preview/build lifecycle tests passed locally. Six additional provider contract tests passed, including refusal, incomplete output and error-content redaction. In-app browser verification passed project creation and plain-language build submission through the actual application routes. The real Responses API returned HTTP 429 with credit_balance_exhausted / insufficient_quota. No AI-generated candidate or successful live Keep journey is claimed. The request and failure were persisted. Restore API credit and restart the build worker to verify successful live generation. Browser candidate tests use explicit synthetic worker fixtures; they do not establish model quality. Latest CI and screenshots are recorded with the review deliverable.
+Sixteen local tests pass, including PostgreSQL lifecycle, provider contracts, lease renewal and preservation of generated files across correction passes. GitHub Actions run 34790113538 passed standard and container browser journeys on b94daf384fc46d5987b2a358f07b5799f4f219f8. The early API quota failure was resolved. The actual model worker generated and repaired a synthetic consumer-transfer prototype that passed source review and structural checks. In-app browser verification covered account exclusion, correction provenance, consent refusal, simulated transfer receipt, and selected fields in the destination preview. Its 22 executable synthetic policy checks passed. Owner Keep acceptance remains pending. CI candidate tests use explicit fixtures and do not establish model quality.
+
+Real-model testing exposed and fixed a repair assembly bug; a regression test proves corrections preserve earlier generated files. Generation now uses low reasoning effort, a 24,000-token output budget and a five-minute per-call timeout. Authenticated stage progress renews the ten-minute lease. The owner UI shows actual current stage and elapsed time without fabricated percentages.
 
 ## First increment — historical local verification
 
@@ -49,5 +51,5 @@ Independent safe ZIP imports/readiness reports; broad runtime execution; full co
 
 Use only on loopback for one owner with synthetic data. Static checks inspect structure and local asset references; they are not arbitrary runtime tests. Project JavaScript executes only in the browser. Random preview URLs grant access while active. Worker snapshots are limited to 100, expire after one hour, and disappear on restart. Stop cannot retract a document already loaded in another browser. Publication and database commit are not distributed-atomic, so a failed operation may leave an orphan snapshot until expiry. The browser polls lifecycle state every two seconds for active builds and every 15 seconds while idle. Container restrictions do not establish a general-purpose server-code sandbox. No production deployment or paid resources are included.
 
-The immediate next step is to restore model API credit, restart the build worker, and verify generation, review, preview, Keep and a follow-up change using the real model. Safe independent ZIP inventory/import and broader runtimes remain subsequent increments.
+The immediate next step is owner review and Keep acceptance of the generated candidate, followed by a requested change. Safe independent ZIP inventory/import and broader runtimes remain subsequent increments.
 
