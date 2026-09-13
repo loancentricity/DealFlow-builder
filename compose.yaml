@@ -59,4 +59,6 @@ networks:
   database:
     internal: true
   preview-link:
-    internal: true
+    # A normal bridge is needed for loopback-published UI/preview ports.
+    # PostgreSQL remains on its separate internal-only network.
+    driver: bridge

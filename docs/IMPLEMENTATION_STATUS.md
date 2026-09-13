@@ -28,7 +28,7 @@ Environment: Node 24.19.0 on Windows; native PostgreSQL 18.4 bound to loopback f
 | In-app browser automation | Passed create, edit, save, reload, interactive preview, update, checks, stop; two-editor conflict preserved the losing draft and recovered the saved version |
 | Stop verification | The old browser preview URL returned HTTP 404 after Stop |
 | Desktop/mobile visual review | Actual screenshots captured at desktop width and 390px mobile; mobile document width 375px within 390px viewport; no horizontal page overflow; preview interaction verified on mobile |
-| Docker Compose | Configuration implemented, execution unverified: Docker is not installed in this environment |
+| Docker Compose | Images built and services started in CI. The first smoke check found that an internal-only network prevented host loopback access. The app/preview bridge is corrected; PostgreSQL remains isolated on its internal network. Full container browser verification is pending the latest CI result. Docker is not installed locally. |
 | GitHub Actions | Run 34786766878 passed dependency install, syntax checks, PostgreSQL 17 migration/integration tests, and the full Playwright browser suite. A separate container startup/browser job is now configured; its result must be checked on the latest review commit. |
 
 Screenshots accompany the task deliverables. They contain only a synthetic starter project. A separate frontend agent implemented the UI, a documentation agent prepared standing requirements/container configuration, and a QA agent supplied tests and review; the lead integrated and verified the result.
