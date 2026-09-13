@@ -85,9 +85,9 @@ function updateControls() {
     : "";
   $("conflict").hidden = !file?.conflict;
   const active = activeBuild();
-  $("request-build").disabled = state.busy || Boolean(active);
-  const hasVersion = state.project?.builds?.some(build => build.status === "applied");
-  $("request-build").textContent = active?.status === "review" ? "Keep or discard this version first" : active ? "Building your idea…" : hasVersion ? "Build my changes ↗" : "Build my idea ↗";
+  const building = active && ["queued", "running"].includes(active.status);
+  $("request-build").disabled = state.busy || Boolean(building);
+  $("request-build").textContent = building ? "Working on your message…" : "Send ↗";
   for (const id of ["apply-build", "cancel-build"]) if ($(id)) $(id).disabled = state.busy;
   if (active?.status === "review") for (const id of ["start-preview", "update-preview", "stop-preview"]) $(id).disabled = true;
 }
@@ -744,7 +744,7 @@ function renderBuilds() {
     const review = typeof latest.review === "string" ? latest.review : latest.review?.summary;
     if (review) current.append(element("p", "", review));
     if (latest.status === "review") {
-      current.append(element("p", "", "Try the preview. Keep it if it feels right, or discard it and describe what you would change."));
+      current.append(element("p", "", "Try the preview, then send your next instruction above to continue from this version. You can also keep it now or discard it."));
       const keep = element("button", "primary full", "Keep this version"); keep.id = "apply-build"; keep.addEventListener("click", () => decideBuild(latest, "apply")); current.append(keep);
     }
     if (["queued", "running", "review"].includes(latest.status)) {
@@ -756,12 +756,21 @@ function renderBuilds() {
   for (const build of builds) { const item = element("article", "request-item"); item.append(element("p", "", build.prompt), element("span", "", `${labels[build.status] || build.status} · ${date(build.created_at)}`)); $("build-history").append(item); }
 }
 async function requestBuild() {
-  if (state.busy || activeBuild()) return;
+  if (state.busy || ["queued", "running"].includes(activeBuild()?.status)) return;
   const prompt = $("build-prompt").value.trim();
   if (!prompt) { $("build-prompt").focus(); return; }
   await operation(async () => {
     notice("Sending your idea to the builder…");
     try {
+      const candidate = activeBuild();
+      if (candidate?.status === "review") {
+        if (hasDrafts()) throw new Error("Save or resolve your code edits before continuing from this preview.");
+        const agent = await api("/api/agent");
+        if (!agent.available) throw new Error(agent.reason || "The builder is unavailable.");
+        await api(projectApi(`/builds/${encodeURIComponent(candidate.id)}/apply`), { method: "POST", body: "{}" });
+        state.buffers.clear(); state.path = null;
+        await refreshProject();
+      }
       const { build } = await api(projectApi("/builds"), { method: "POST", body: JSON.stringify({ prompt }) });
       state.project.builds = [build, ...(state.project.builds || [])];
       $("build-prompt").value = ""; state.prompts.delete(state.project.project.id);

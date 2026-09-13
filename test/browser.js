@@ -184,7 +184,7 @@ async function candidateDecisionJourney(projectId) {
   };
   const detail = async () => (await page.request.get(`${base}/api/projects/${projectId}`)).json();
   const heartbeat = () => internal("heartbeat", {name:"Browser test fixture (not AI)",ready:true});
-  const publishCandidate = async (heading) => {
+  const publishCandidate = async (heading, expectedBaseHeading) => {
     await heartbeat();
     const source = await detail();
     const html = source.files.find(file => file.path === "index.html");
@@ -199,6 +199,11 @@ async function candidateDecisionJourney(projectId) {
     const {build:requested} = await queued.json();
     const {build:claimed} = await internal("claim",{});
     assert.equal(claimed.id,requested.id,"isolated fixture claims its own request");
+    if (expectedBaseHeading) {
+      assert.ok(claimed.source_files.find(file => file.path === "index.html").content.includes(expectedBaseHeading), "follow-up starts from the reviewed version without a Keep click");
+      assert.ok(claimed.history.length > 0, "follow-up includes prior saved requests");
+    }
+    const baseline = (await detail()).files;
     const {build:reviewed} = await internal(`${claimed.id}/complete`, {
       lease_token:claimed.lease_token,
       files:[{path:"index.html",content:candidate}],
@@ -209,12 +214,13 @@ async function candidateDecisionJourney(projectId) {
     await page.locator("#apply-build").waitFor({state:"visible",timeout:20000});
     await page.locator("#build-progress").waitFor({state:"hidden"});
     await page.frameLocator("#preview-frame").getByRole("heading",{name:heading,exact:true}).waitFor();
-    assert.deepEqual((await detail()).files,source.files,"reviewing a candidate preserves saved source");
+    assert.deepEqual((await detail()).files,baseline,"reviewing a candidate preserves saved source");
     return reviewed;
   };
   try {
     if (await page.locator("#toggle-code").getAttribute("aria-expanded") === "true") await page.locator("#toggle-code").click();
-    await publishCandidate("Kept browser fixture");
+    await publishCandidate("Before follow-up fixture");
+    await publishCandidate("Kept browser fixture", "Before follow-up fixture");
     await page.locator("#apply-build").click();
     await page.waitForFunction(() => document.querySelector("#notice").textContent === "Version kept. Tell us what you would like to improve next.");
     assert.match((await detail()).files.find(file=>file.path==="index.html").content,/Kept browser fixture/);

@@ -70,7 +70,8 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
           const lease=randomBytes(32).toString("hex");
           await c.query("UPDATE builds SET status='running',lease_token=$2,claimed_at=now(),updated_at=now() WHERE id=$1",[b.id,lease]);
           await event(c,b,"TASK_STARTED","Build claimed by the external worker.");
-          return {id:b.id,project_id:b.project_id,prompt:b.prompt,source_files:b.source_files,lease_token:lease};
+          const history = (await c.query("SELECT prompt,summary FROM builds WHERE project_id=$1 AND status='applied' ORDER BY created_at DESC LIMIT 10", [b.project_id])).rows.reverse();
+          return {id:b.id,project_id:b.project_id,prompt:b.prompt,source_files:b.source_files,history,lease_token:lease};
         });
         json(res,200,{build}); return true;
       }
