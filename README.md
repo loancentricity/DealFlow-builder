@@ -2,7 +2,7 @@
 
 A local development workspace for creating, editing, checking, and previewing projects. This is an early runnable increment of an owner-controlled development platform, not the completed MVP. Read [DEALFLOW.md](DEALFLOW.md) for standing requirements and [implementation status](docs/IMPLEMENTATION_STATUS.md) for scope and verification.
 
-The supported runtime is static HTML, CSS, and browser JavaScript. PostgreSQL stores project sources and durable operations. A separate preview worker serves project files; the control plane does not execute project code. An optional separate build worker calls the Responses API to generate candidate source, then requests an independent source-review pass. The dashboard accepts plain-language requests and keeps candidate changes separate until the owner selects Keep. Builder availability reflects an actual configured worker heartbeat; unavailable execution is never simulated.
+The supported runtime is static HTML, CSS, and browser JavaScript. PostgreSQL stores project sources and durable operations. A separate preview worker serves project files; the control plane does not execute project code. An optional separate build worker calls the Responses API to generate candidate source, then requests an independent source-review pass. Owners continue by sending plain-language messages. Sending feedback on a reviewed preview saves that version as the starting point before requesting the next change; Keep and Discard remain optional explicit actions. Builder availability reflects an actual configured worker heartbeat; unavailable execution is never simulated.
 
 ## Local startup
 
@@ -35,7 +35,7 @@ The checked-in Compose setup supports the manual source/preview workflow; it doe
 
 1. Create a project and describe the desired product or change in plain language.
 2. With an available worker, submit the request and follow recorded build/review activity.
-3. Inspect the candidate preview. Keep applies its source and preview; Discard cancels the candidate without changing saved source.
+3. Inspect the candidate preview and send the next instruction in the same message box. This saves the reviewed candidate, then builds from those files with up to ten recent applied requests as context. Keep also saves explicitly; Discard cancels the candidate without changing saved source. Sending a new instruction waits while another generation is running.
 4. If another edit changed any source since generation began, Keep rejects the stale candidate rather than overwriting newer work. Discard it and request a new build from current source.
 
 Candidates, request history, review results, and source versions persist in PostgreSQL. Generated paths merge with the captured source snapshot; omitted files are preserved. The Code view and technical checks remain available as optional tools. Candidate previews are disposable, while their source is retained. A review approval is an AI source review and structural check result, not proof that browser behavior works.
