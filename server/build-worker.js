@@ -23,7 +23,7 @@ export function createOpenAIProvider({ apiKey, baseUrl = "https://api.openai.com
       method: body ? "POST" : "GET",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(300000),
     });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));

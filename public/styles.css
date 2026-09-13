@@ -1145,6 +1145,7 @@ dialog input {
 }
 
 /* Owner workspace: the brief and result are primary; source is optional. */
+.build-progress{display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:#0b315d;color:white;border-radius:12px;padding:24px;margin-bottom:24px;box-shadow:0 6px 24px #12365b20}.build-progress strong{font-size:19px}.build-progress>span:last-child{font-size:13px;color:#d6e8ff}.build-spinner{width:24px;height:24px;border:3px solid #ffffff50;border-top-color:white;border-radius:50%;animation:build-spin 1s linear infinite;flex-shrink:0}@keyframes build-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.build-spinner{animation:none}}
 .owner-layout{display:grid;grid-template-columns:minmax(280px,340px) minmax(0,1fr);gap:22px;align-items:start}
 .brief-panel{background:#fff;border:1px solid var(--border);border-radius:12px;padding:25px;min-width:0}
 .brief-heading h2{font-size:24px;letter-spacing:-.8px;margin-bottom:10px}.brief-heading>p{font-size:13px;line-height:1.7;color:#667891;margin-bottom:24px}

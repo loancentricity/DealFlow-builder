@@ -682,6 +682,20 @@ function renderAvailability(agent) {
 function renderBuilds() {
   renderAvailability(state.project.agent);
   const builds = state.project.builds || [];
+  const job = builds.find(build => ["queued", "running"].includes(build.status));
+  let progress = $("build-progress");
+  if (!progress) {
+    progress = element("section", "build-progress"); progress.id = "build-progress";
+    progress.setAttribute("role", "status"); progress.setAttribute("aria-live", "polite");
+    $("workspace").prepend(progress);
+  }
+  progress.hidden = !job;
+  if (job) {
+    const latestEvent = (state.project.events || []).find(event => event.task_id === job.task_id && ["GENERATION_STARTED", "REVIEW_STARTED", "REPAIR_STARTED"].includes(event.type));
+    const stages = { GENERATION_STARTED: "Creating your website", REVIEW_STARTED: "Reviewing the generated files", REPAIR_STARTED: "Correcting issues found in review" };
+    const seconds = Math.max(0, Math.floor((Date.now() - new Date(job.created_at).getTime()) / 1000));
+    progress.replaceChildren(element("span", "build-spinner", ""), element("strong", "", stages[latestEvent?.type] || (job.status === "queued" ? "Waiting for the builder" : "Build in progress")), element("span", "", `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed · This page updates automatically.`));
+  }
   const key = JSON.stringify(builds);
   if (state.buildKey === key) return;
   state.buildKey = key;

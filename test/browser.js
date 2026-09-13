@@ -195,6 +195,7 @@ async function candidateDecisionJourney(projectId) {
     await page.locator("#request-build").click();
     const queued = await queuedResponse;
     assert.equal(queued.status(),201);
+    await page.locator("#build-progress").waitFor({state:"visible"});
     const {build:requested} = await queued.json();
     const {build:claimed} = await internal("claim",{});
     assert.equal(claimed.id,requested.id,"isolated fixture claims its own request");
@@ -206,6 +207,7 @@ async function candidateDecisionJourney(projectId) {
     });
     assert.equal(reviewed.status,"review");
     await page.locator("#apply-build").waitFor({state:"visible",timeout:20000});
+    await page.locator("#build-progress").waitFor({state:"hidden"});
     await page.frameLocator("#preview-frame").getByRole("heading",{name:heading,exact:true}).waitFor();
     assert.deepEqual((await detail()).files,source.files,"reviewing a candidate preserves saved source");
     return reviewed;

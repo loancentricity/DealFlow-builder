@@ -86,6 +86,7 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
             const type=text(body.type,80,"Event type");
             if(!/^[A-Z][A-Z0-9_]*$/.test(type)) throw invalid("Invalid event type.");
             await event(c,b,type,text(body.message,2000,"Event message"));
+            await c.query("UPDATE builds SET claimed_at=now(),updated_at=now() WHERE id=$1", [id]);
             return display(b);
           }
           if(operation === "fail") {

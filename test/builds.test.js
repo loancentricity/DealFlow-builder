@@ -81,6 +81,9 @@ test('real PostgreSQL build queue authenticates workers, reviews candidates, pro
   assert.equal('lease_token' in publicBuilds[0],false);
   assert.equal('source_files' in publicBuilds[0],false);
   assert.equal((await complete(claimed,{lease_token:'stale-token'})).status,409);
+  await pool.query("UPDATE builds SET claimed_at=now()-interval '9 minutes' WHERE id=$1", [claimed.id]);
+  assert.equal((await request(`${internal}/${claimed.id}/event`, {lease_token:claimed.lease_token,type:'REVIEW_STARTED',message:'Test-only review stage.'},true)).status,200);
+  assert.equal((await pool.query("SELECT claimed_at>now()-interval '10 seconds' AS renewed FROM builds WHERE id=$1",[claimed.id])).rows[0].renewed,true,'authenticated stage progress renews an unexpired lease');
   const reviewed = await complete(claimed);
   assert.equal(reviewed.status,200);
   assert.equal(reviewed.data.build.status,'review');
