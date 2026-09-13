@@ -86,12 +86,14 @@ export async function runBuildWorker({ appUrl, token, provider, signal }) {
           await report("GENERATION_STARTED", "AI builder is creating the requested changes.");
           let candidate, review, feedback;
           for (let attempt = 0; attempt < 2; attempt++) {
-            candidate = await provider.build({ request: build.prompt, source_files: build.source_files, previous_candidate: candidate, feedback });
+            const baseline = candidate?.files || build.source_files;
+            candidate = await provider.build({ request: build.prompt, source_files: baseline, feedback });
             if (!Array.isArray(candidate.files) || !candidate.files.length || candidate.files.length > 30) throw new Error("Model returned an invalid file list.");
             candidate.files.forEach(file => validateFile({ ...file, version: 1 }));
-            const merged = new Map(build.source_files.map(file => [file.path, file]));
+            const merged = new Map(baseline.map(file => [file.path, file]));
             candidate.files.forEach(file => merged.set(file.path, file));
             const files = [...merged.values()];
+            candidate.files = files;
             const checks = runStaticChecks(files);
             await report("REVIEW_STARTED", "A separate AI pass is reviewing the candidate source and requested behavior.");
             review = await provider.review({ request: build.prompt, files, structural_checks: checks });
