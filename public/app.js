@@ -86,7 +86,8 @@ function updateControls() {
   $("conflict").hidden = !file?.conflict;
   const active = activeBuild();
   $("request-build").disabled = state.busy || Boolean(active);
-  $("request-build").textContent = active?.status === "review" ? "Review this version first" : active ? "Building your idea…" : "Build my idea ↗";
+  const hasVersion = state.project?.builds?.some(build => build.status === "applied");
+  $("request-build").textContent = active?.status === "review" ? "Keep or discard this version first" : active ? "Building your idea…" : hasVersion ? "Build my changes ↗" : "Build my idea ↗";
   for (const id of ["apply-build", "cancel-build"]) if ($(id)) $(id).disabled = state.busy;
   if (active?.status === "review") for (const id of ["start-preview", "update-preview", "stop-preview"]) $(id).disabled = true;
 }
@@ -671,6 +672,19 @@ function setCodeVisible(visible) {
 $("toggle-code").addEventListener("click", () => setCodeVisible($("toggle-code").getAttribute("aria-expanded") !== "true"));
 $("build-prompt").addEventListener("input", () => { if (state.project) state.prompts.set(state.project.project.id, $("build-prompt").value); });
 $("build-form").addEventListener("submit", (event) => { event.preventDefault(); requestBuild(); });
+const editGuides = {
+  add: ["What feature or page should we add?", "Add a page that explains the service and lets visitors start the readiness flow."],
+  change: ["What should look or read differently?", "Change the homepage colors and make the main message easier to understand."],
+  modify: ["Which existing step or behavior should change?", "Modify the transfer flow so people can go back and edit their selection before confirming."],
+  improve: ["What should work better for your users?", "Improve the mobile layout and make the next step clearer on every screen."],
+};
+document.querySelectorAll("[data-edit-action]").forEach(button => button.addEventListener("click", () => {
+  const [guidance, example] = editGuides[button.dataset.editAction];
+  document.querySelectorAll("[data-edit-action]").forEach(item => item.setAttribute("aria-pressed", String(item === button)));
+  $("edit-guidance").textContent = activeBuild()?.status === "review" ? `${guidance} Keep this version first to use it as the starting point. Your draft below will stay intact.` : guidance;
+  $("build-prompt").placeholder = example;
+  $("build-prompt").focus();
+}));
 function renderAvailability(agent) {
   const available = Boolean(agent?.available);
   $("builder-status").textContent = available ? "Builder connected" : "Builder not connected";
