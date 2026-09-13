@@ -20,6 +20,7 @@ try {
   await page.getByLabel("Project name", { exact: true }).fill(projectName);
   await page.locator("#create-submit").click();
   await page.locator("#workspace").waitFor({ state: "visible" });
+  await page.locator("#toggle-code").click();
   await page.getByRole("button", { name: "index.html", exact: true }).click();
   const editor = page.getByLabel("Source code", { exact: true });
   const original = await editor.inputValue();
@@ -38,6 +39,7 @@ try {
   );
   await page.reload();
   await page.locator("#workspace").waitFor({ state: "visible" });
+  await page.locator("#toggle-code").click();
   await page.getByRole("button", { name: "index.html", exact: true }).click();
   assert.match(await editor.inputValue(), new RegExp(marker));
 
@@ -79,7 +81,8 @@ try {
     document.querySelector("#code-editor").value.includes("concurrent save"),
   );
 
-  await page.locator("#start-preview").click();
+  // Saved previews auto-start when opened; publish the latest saved source.
+  await page.locator("#update-preview").click();
   const frame = page.frameLocator("#preview-frame");
   await frame.getByRole("heading", { name: marker, exact: true }).waitFor();
   await frame
@@ -116,6 +119,7 @@ try {
       response.request().method() === "POST" &&
       response.url().endsWith("/tests"),
   );
+  await page.locator("details.project-details > summary").click();
   await page.locator("#run-tests").click();
   assert.equal((await checkResponse).status(), 200);
   await page.waitForFunction(
@@ -142,6 +146,11 @@ try {
   await page.locator("#preview-empty").waitFor({ state: "visible" });
   assert.equal((await page.request.get(liveUrl)).status(), 404);
   assert.equal((await page.request.get(firstUrl)).status(), 404);
+  if (process.env.BUILD_WORKER_TOKEN) {
+    await candidateDecisionJourney(project.id);
+  } else {
+    console.log("SKIP: candidate Keep/Discard browser journey requires BUILD_WORKER_TOKEN and an isolated test environment without a live build worker.");
+  }
   await page.locator("#back-projects").click();
   await page.locator("#dashboard").waitFor({ state: "visible" });
   await page.screenshot({
@@ -162,4 +171,64 @@ try {
   throw error;
 } finally {
   await browser.close();
+}
+
+// Authenticated deterministic fixture for CI only. Never run alongside a live worker.
+// This verifies owner decisions, not AI generation or the model provider.
+async function candidateDecisionJourney(projectId) {
+  const headers = { Authorization: `Bearer ${process.env.BUILD_WORKER_TOKEN}` };
+  const internal = async (path, data) => {
+    const response = await page.request.post(`${base}/internal/build-worker/${path}`, {headers,data});
+    assert.equal(response.status(), 200, `test fixture worker ${path}`);
+    return response.json();
+  };
+  const detail = async () => (await page.request.get(`${base}/api/projects/${projectId}`)).json();
+  const heartbeat = () => internal("heartbeat", {name:"Browser test fixture (not AI)",ready:true});
+  const publishCandidate = async (heading) => {
+    await heartbeat();
+    const source = await detail();
+    const html = source.files.find(file => file.path === "index.html");
+    const candidate = html.content.replace(/<h1>[^<]*<\/h1>/, `<h1>${heading}</h1>`);
+    assert.notEqual(candidate,html.content);
+    await page.locator("#build-prompt").fill(`TEST FIXTURE ONLY: change the heading to ${heading}.`);
+    const queuedResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/projects/${projectId}/builds`));
+    await page.locator("#request-build").click();
+    const queued = await queuedResponse;
+    assert.equal(queued.status(),201);
+    const {build:requested} = await queued.json();
+    const {build:claimed} = await internal("claim",{});
+    assert.equal(claimed.id,requested.id,"isolated fixture claims its own request");
+    const {build:reviewed} = await internal(`${claimed.id}/complete`, {
+      lease_token:claimed.lease_token,
+      files:[{path:"index.html",content:candidate}],
+      summary:"Deterministic browser-test candidate, not an AI-generated result.",
+      review:{approved:true,summary:"Explicit test fixture source-review decision."},
+    });
+    assert.equal(reviewed.status,"review");
+    await page.locator("#apply-build").waitFor({state:"visible",timeout:20000});
+    await page.frameLocator("#preview-frame").getByRole("heading",{name:heading,exact:true}).waitFor();
+    assert.deepEqual((await detail()).files,source.files,"reviewing a candidate preserves saved source");
+    return reviewed;
+  };
+  try {
+    if (await page.locator("#toggle-code").getAttribute("aria-expanded") === "true") await page.locator("#toggle-code").click();
+    await publishCandidate("Kept browser fixture");
+    await page.locator("#apply-build").click();
+    await page.waitForFunction(() => document.querySelector("#notice").textContent === "Version kept. Tell us what you would like to improve next.");
+    assert.match((await detail()).files.find(file=>file.path==="index.html").content,/Kept browser fixture/);
+    await page.reload();
+    await page.locator("#workspace").waitFor({state:"visible"});
+    await page.frameLocator("#preview-frame").getByRole("heading",{name:"Kept browser fixture",exact:true}).waitFor();
+    const saved = (await detail()).files;
+    const discarded = await publishCandidate("Discarded browser fixture");
+    await page.locator("#cancel-build").click();
+    await page.waitForFunction(() => document.querySelector("#notice").textContent === "Version discarded. Your saved website is unchanged.");
+    assert.deepEqual((await detail()).files,saved,"discard preserves source contents and versions");
+    assert.equal((await page.request.get(discarded.preview_url)).status(),404);
+    await page.frameLocator("#preview-frame").getByRole("heading",{name:"Kept browser fixture",exact:true}).waitFor();
+    await page.screenshot({path:"test-results/owner-decisions-mobile.png",fullPage:true});
+    console.log("PASS: test-only candidate preview → Keep → reload persistence → second candidate → Discard → saved source unchanged.");
+  } finally {
+    await internal("heartbeat",{name:"Browser test fixture (not AI)",ready:false,reason:"Browser fixture completed; no live AI provider was used."});
+  }
 }

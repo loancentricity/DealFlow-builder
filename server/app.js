@@ -8,7 +8,7 @@ import {
   starterFiles,
   runStaticChecks,
 } from "./domain.js";
-import { UnavailableAgentProvider } from "./agent-provider.js";
+import { createBuildService } from "./build-service.js";
 import { json, readJson } from "./http.js";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function createApp({
@@ -16,7 +16,7 @@ export function createApp({
   workerUrl,
   workerToken,
   previewPublicUrl,
-  agentProvider = new UnavailableAgentProvider(),
+  buildWorkerToken,
 }) {
   const worker = async (path, method = "GET", body) => {
     if (!workerUrl || !workerToken)
@@ -76,6 +76,12 @@ export function createApp({
     running: true,
     url: `${previewPublicUrl.replace(/\/$/, "")}/p/${id}/index.html`,
   });
+  const builds = createBuildService({
+    pool, workerToken: buildWorkerToken,
+    publishSnapshot: (id, files) => worker("/internal/snapshots", "POST", { id, files }),
+    removeSnapshot: id => worker(`/internal/snapshots/${id}`, "DELETE"),
+    previewUrl: id => publicPreview(id).url,
+  });
   const server = http.createServer(async (req, res) => {
     try {
       // A local single-owner app: reject hostile Host/Origin values and DNS rebinding.
@@ -88,6 +94,7 @@ export function createApp({
       if (req.headers["sec-fetch-site"] === "cross-site")
         throw invalid("Cross-site requests are not allowed.", 403);
       const path = new URL(req.url, `http://${authority}`).pathname;
+      if (await builds.handle(req, res, path)) return;
       if (path === "/api/health" && req.method === "GET") {
         try {
           await pool.query("SELECT 1");
@@ -186,9 +193,10 @@ export function createApp({
                   [id],
                 )
               ).rows,
-              agent: agentProvider.status(),
             };
           });
+          data.agent = await builds.status();
+          data.builds = await builds.list(id);
           return json(res, 200, data);
         }
         if (action === "files" && req.method === "PUT") {

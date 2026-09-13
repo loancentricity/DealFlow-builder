@@ -1,8 +1,8 @@
 # DealFlow Builder
 
-A local development workspace for creating, editing, checking, and previewing projects. This is the first runnable increment of an owner-controlled development platform, not the completed MVP. Read [DEALFLOW.md](DEALFLOW.md) for standing requirements and [implementation status](docs/IMPLEMENTATION_STATUS.md) for scope and verification.
+A local development workspace for creating, editing, checking, and previewing projects. This is an early runnable increment of an owner-controlled development platform, not the completed MVP. Read [DEALFLOW.md](DEALFLOW.md) for standing requirements and [implementation status](docs/IMPLEMENTATION_STATUS.md) for scope and verification.
 
-The supported runtime is static HTML, CSS, and browser JavaScript. PostgreSQL stores project sources and durable operations. A separate preview worker serves project files; the control plane does not execute project code. Agent execution is unavailable until a real provider and isolated execution worker are connected.
+The supported runtime is static HTML, CSS, and browser JavaScript. PostgreSQL stores project sources and durable operations. A separate preview worker serves project files; the control plane does not execute project code. An optional separate build worker calls the Responses API to generate candidate source, then requests an independent source-review pass. The dashboard accepts plain-language requests and keeps candidate changes separate until the owner selects Keep. Builder availability reflects an actual configured worker heartbeat; unavailable execution is never simulated.
 
 ## Local startup
 
@@ -23,7 +23,24 @@ Run `npm run migrate`, then `npm start`. In a separate process, run `node server
 
 Alternatively, use Docker Compose. Set `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `PREVIEW_WORKER_TOKEN` locally before running `docker compose up --build`. Use URL-safe database credentials because Compose constructs the PostgreSQL connection URL. Compose starts PostgreSQL, applies migrations before starting the app, and runs the preview in a separate restricted container. Ports bind to loopback. Stop with `docker compose down`; the named database volume survives. Removing that volume deletes persisted projects.
 
-## Try the journey
+## Optional AI build worker
+
+Configure `BUILD_WORKER_TOKEN` on the control plane and build worker; use a separately generated token of at least 24 characters, distinct from `PREVIEW_WORKER_TOKEN`. Configure `OPENAI_API_KEY` only in the build worker process. Do not put that key in the control-plane `.env`, browser, project source, or preview worker environment. Model calls send the requested change and source snapshot to the configured model API; use synthetic projects and an account authorized for this usage.
+
+Start the app with the build token, then start a separate process with only the build token and model settings and run `npm run build-worker`. `BUILD_CONTROL_URL` defaults to `http://127.0.0.1:3000` and must target a loopback host. `OPENAI_BASE_URL` optionally selects an HTTPS model API endpoint; `OPENAI_MODEL` defaults to `gpt-6-astra`. Availability requires model access and a recent ready heartbeat. The worker can make one correction pass after review. Generation and source review are API calls, not browser tests or runtime execution.
+
+The checked-in Compose setup supports the manual source/preview workflow; it does not start an AI build worker. To connect a host build worker to a containerized app, explicitly pass the same `BUILD_WORKER_TOKEN` to the app container using a local Compose override and point the host worker at the published loopback app URL. Keep `OPENAI_API_KEY` exclusively in the host worker process.
+
+## Try the owner journey
+
+1. Create a project and describe the desired product or change in plain language.
+2. With an available worker, submit the request and follow recorded build/review activity.
+3. Inspect the candidate preview. Keep applies its source and preview; Discard cancels the candidate without changing saved source.
+4. If another edit changed any source since generation began, Keep rejects the stale candidate rather than overwriting newer work. Discard it and request a new build from current source.
+
+Candidates, request history, review results, and source versions persist in PostgreSQL. Generated paths merge with the captured source snapshot; omitted files are preserved. The Code view and technical checks remain available as optional tools. Candidate previews are disposable, while their source is retained. A review approval is an AI source review and structural check result, not proof that browser behavior works.
+
+## Try the manual source journey
 
 1. Create a project from the supported starter on the dashboard.
 2. Open a file, edit its source, and save. Reload the page and inspect the saved file.
@@ -52,3 +69,4 @@ This increment is for local, single-owner development. It has no multiuser authe
 The Compose worker image contains only static-serving code, has no database dependency or credentials, and uses a network separate from PostgreSQL. The worker API token must be at least 24 characters. Snapshot publication and the database transaction are not a distributed atomic commit: a failure between them can leave an inaccessible-to-the-builder snapshot until its one-hour expiry. Worker outages preserve access to saved source. The static checks inspect document structure and asset references only; they do not execute arbitrary project tests.
 
 Safe independent Replit ZIP imports, broader runtimes, coordinated agents, full environment separation, production hardening, infrastructure definitions, and release/rollback automation remain backlog requirements. No production deployment or external service provisioning is included.
+

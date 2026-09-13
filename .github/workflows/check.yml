@@ -24,6 +24,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://dealflow_test:disposable_ci_only@127.0.0.1:5432/dealflow_test
       PREVIEW_WORKER_TOKEN: disposable-ci-worker-token-not-for-deployment
+      BUILD_WORKER_TOKEN: disposable-ci-build-token-not-for-deployment
       PREVIEW_WORKER_URL: http://127.0.0.1:3001
       PREVIEW_PUBLIC_URL: http://127.0.0.1:3001
       PREVIEW_HOST: 127.0.0.1

@@ -11,6 +11,9 @@ const state = {
   syncEpoch: 0,
   polling: false,
   testKey: null,
+  prompts: new Map(),
+  buildKey: null,
+  lastPoll: 0,
 };
 function element(tag, className, content) {
   const node = document.createElement(tag);
@@ -81,6 +84,11 @@ function updateControls() {
         : `Saved · version ${file.version}`
     : "";
   $("conflict").hidden = !file?.conflict;
+  const active = activeBuild();
+  $("request-build").disabled = state.busy || Boolean(active);
+  $("request-build").textContent = active?.status === "review" ? "Review this version first" : active ? "Building your idea…" : "Build my idea ↗";
+  for (const id of ["apply-build", "cancel-build"]) if ($(id)) $(id).disabled = state.busy;
+  if (active?.status === "review") for (const id of ["start-preview", "update-preview", "stop-preview"]) $(id).disabled = true;
 }
 async function operation(callback) {
   if (state.busy) return;
@@ -113,11 +121,11 @@ function renderProjects() {
     );
     const empty = element("div", "empty-card");
     empty.append(
-      element("h3", "", "A clean slate. A working starter."),
+      element("h3", "", "Every great project starts with an idea."),
       element(
         "p",
         "",
-        "Create your first project to start editing and previewing your work.",
+        "Describe your website, see it take shape, and make it your own.",
       ),
     );
     const button = element(
@@ -141,7 +149,7 @@ function renderProjects() {
     const top = element("div", "card-top");
     top.append(
       element("span", "project-symbol", "</>"),
-      element("span", "card-type", "STATIC STARTER"),
+      element("span", "card-type", "WEBSITE"),
     );
     card.append(
       top,
@@ -188,6 +196,9 @@ async function openProject(id) {
       state.buffers.clear();
       state.path = null;
       state.testKey = null;
+      state.buildKey = null;
+      $("build-prompt").value = state.prompts.get(id) || "";
+      setCodeVisible(false);
     }
     state.project = data;
     syncBuffers(data.files);
@@ -196,6 +207,7 @@ async function openProject(id) {
     $("workspace").hidden = false;
     history.replaceState(null, "", `#project=${encodeURIComponent(id)}`);
     notice("");
+    if (!data.preview?.running && !data.preview?.unavailable && !activeBuild()) await previewAction("start");
   } catch (error) {
     if (token === state.loadToken) notice(error.message, true);
   }
@@ -250,18 +262,20 @@ function renderWorkspace() {
     state.project.agent?.reason ||
     "Connect an agent provider and isolated worker to enable coordinated execution.";
   renderEvents();
+  renderBuilds();
   restoreTestResults();
   renderProjects();
   updateControls();
 }
 function renderPreview() {
-  const preview = state.project.preview;
+  const candidate = activeBuild();
+  const preview = candidate?.status === "review" && candidate.preview_url ? { running: true, url: candidate.preview_url } : state.project.preview;
   const running = Boolean(
     !preview?.unavailable && preview?.running && preview.url,
   );
   $("preview-status").textContent = preview?.unavailable
     ? "Unavailable"
-    : running
+    : candidate?.status === "review" && candidate.preview_url ? "Version to review" : running
       ? "Running"
       : "Stopped";
   $("preview-dot").classList.toggle("live", running);
@@ -282,6 +296,7 @@ function renderPreview() {
     $("preview-frame").removeAttribute("src");
     state.previewUrl = null;
   }
+  $("version-label").textContent = (state.project.builds || []).some((build) => build.status === "applied") ? "Your saved version" : "Starter · ready for your idea";
 }
 function renderTestResult(result) {
   $("test-results").replaceChildren(
@@ -467,14 +482,18 @@ $("create-form").addEventListener("submit", async (event) => {
   $("create-submit").textContent = "Creating project…";
   $("create-error").hidden = true;
   try {
+    const brief = $("project-brief").value.trim();
     const { project } = await api("/api/projects", {
       method: "POST",
       body: JSON.stringify({ name }),
     });
     $("create-dialog").close();
     $("project-name").value = "";
+    $("project-brief").value = "";
+    if (brief) state.prompts.set(project.id, brief);
     await loadProjects();
     await openProject(project.id);
+    if (brief && state.project?.project.id === project.id) await requestBuild();
   } catch (error) {
     $("create-error").textContent = error.message;
     $("create-error").hidden = false;
@@ -548,12 +567,14 @@ async function initialize() {
   const results = await Promise.allSettled([
     api("/api/health"),
     loadProjects(),
+    api("/api/agent"),
   ]);
   $("health-label").textContent =
     results[0].status === "fulfilled"
       ? "Control plane online"
       : "Connection unavailable";
   $("health-dot").classList.toggle("live", results[0].status === "fulfilled");
+  if (results[2].status === "fulfilled") renderAvailability(results[2].value);
   if (results[1].status === "rejected") {
     $("project-grid").replaceChildren(
       element(
@@ -591,6 +612,10 @@ setInterval(async () => {
     state.polling
   )
     return;
+  const active = activeBuild();
+  const delay = active && ["queued", "running"].includes(active.status) ? 2000 : 15000;
+  if (Date.now() - state.lastPoll < delay) return;
+  state.lastPoll = Date.now();
   const id = state.project.project.id;
   const epoch = state.syncEpoch;
   const token = state.loadToken;
@@ -608,7 +633,10 @@ setInterval(async () => {
     state.project.preview = data.preview;
     state.project.tasks = data.tasks;
     state.project.events = data.events;
+    state.project.builds = data.builds;
+    state.project.agent = data.agent;
     renderPreview();
+    renderBuilds();
     restoreTestResults();
     renderEvents();
     updateControls();
@@ -628,4 +656,106 @@ setInterval(async () => {
   } finally {
     state.polling = false;
   }
-}, 15000);
+}, 2000);
+
+function activeBuild() {
+  return (state.project?.builds || []).find((build) => ["queued", "running", "review"].includes(build.status));
+}
+function setCodeVisible(visible) {
+  document.querySelector(".files-panel").hidden = !visible;
+  document.querySelector(".editor-panel").hidden = !visible;
+  document.querySelector(".workbench").classList.toggle("code-visible", visible);
+  $("toggle-code").textContent = visible ? "Hide code" : "Code";
+  $("toggle-code").setAttribute("aria-expanded", String(visible));
+}
+$("toggle-code").addEventListener("click", () => setCodeVisible($("toggle-code").getAttribute("aria-expanded") !== "true"));
+$("build-prompt").addEventListener("input", () => { if (state.project) state.prompts.set(state.project.project.id, $("build-prompt").value); });
+$("build-form").addEventListener("submit", (event) => { event.preventDefault(); requestBuild(); });
+function renderAvailability(agent) {
+  const available = Boolean(agent?.available);
+  $("builder-status").textContent = available ? "Builder connected" : "Builder not connected";
+  $("builder-dot").classList.toggle("live", available);
+  $("builder-reason").textContent = available ? "Ready to turn your requests into a version you can review." : agent?.reason || "The builder is unavailable. Your idea will stay here so you can try again when it connects.";
+  $("agent-status").textContent = available ? "Connected" : "Unavailable";
+  $("agent-reason").textContent = agent?.reason || (available ? agent.name || "Builder connected." : "No builder is connected.");
+}
+function renderBuilds() {
+  renderAvailability(state.project.agent);
+  const builds = state.project.builds || [];
+  const key = JSON.stringify(builds);
+  if (state.buildKey === key) return;
+  state.buildKey = key;
+  const active = activeBuild();
+  const latest = active || builds[0];
+  const current = $("build-current"); current.replaceChildren(); current.hidden = !latest;
+  const labels = { queued: "Your request is queued", running: "Building your idea", review: "A new version is ready", applied: "This version is yours", failed: "This build needs another try", cancelled: "Version discarded" };
+  if (latest) {
+    current.append(element("span", `build-state ${latest.status}`, latest.status === "review" ? "READY FOR YOUR REVIEW" : latest.status.toUpperCase()), element("h3", "", labels[latest.status] || latest.status));
+    if (latest.summary) current.append(element("p", "", latest.summary));
+    if (latest.error) current.append(element("p", "form-error", buildFailureMessage(latest)));
+    if (latest.status === "failed") {
+      notice(buildFailureMessage(latest), true);
+      const retry = element("button", "secondary full", "Edit and try again");
+      retry.addEventListener("click", () => {
+        const draft = $("build-prompt").value.trim();
+        if (draft && draft !== latest.prompt && !confirm("Replace your current idea draft with this request?")) return;
+        $("build-prompt").value = latest.prompt;
+        state.prompts.set(state.project.project.id, latest.prompt);
+        $("build-prompt").focus();
+        notice("Your request is ready to edit. Choose Build my idea when you want to try again.");
+      });
+      current.append(retry);
+    }
+    if (["queued", "running"].includes(latest.status)) current.append(element("p", "", latest.status === "queued" ? "Your request is saved and waiting for the builder." : "The builder is working on your request. The result will appear here when it is ready."));
+    const checks = Array.isArray(latest.checks) ? latest.checks : latest.checks?.checks;
+    if (checks?.length) {
+      const details = element("details", "build-checks"); details.append(element("summary", "", `${checks.filter((check) => check.passed).length} of ${checks.length} checks passed`));
+      for (const check of checks) details.append(element("p", "", `${check.passed ? "✓" : "×"} ${check.name}${check.detail ? ` — ${check.detail}` : ""}`));
+      current.append(details);
+    }
+    const review = typeof latest.review === "string" ? latest.review : latest.review?.summary;
+    if (review) current.append(element("p", "", review));
+    if (latest.status === "review") {
+      current.append(element("p", "", "Try the preview. Keep it if it feels right, or discard it and describe what you would change."));
+      const keep = element("button", "primary full", "Keep this version"); keep.id = "apply-build"; keep.addEventListener("click", () => decideBuild(latest, "apply")); current.append(keep);
+    }
+    if (["queued", "running", "review"].includes(latest.status)) {
+      const cancel = element("button", "text-button discard-button", latest.status === "review" ? "Discard version" : "Cancel build"); cancel.id = "cancel-build"; cancel.addEventListener("click", () => decideBuild(latest, "cancel")); current.append(cancel);
+    }
+  }
+  $("build-history").replaceChildren();
+  if (!builds.length) $("build-history").append(element("p", "muted", "Your first idea starts here. Each request and result will be saved."));
+  for (const build of builds) { const item = element("article", "request-item"); item.append(element("p", "", build.prompt), element("span", "", `${labels[build.status] || build.status} · ${date(build.created_at)}`)); $("build-history").append(item); }
+}
+async function requestBuild() {
+  if (state.busy || activeBuild()) return;
+  const prompt = $("build-prompt").value.trim();
+  if (!prompt) { $("build-prompt").focus(); return; }
+  await operation(async () => {
+    notice("Sending your idea to the builder…");
+    try {
+      const { build } = await api(projectApi("/builds"), { method: "POST", body: JSON.stringify({ prompt }) });
+      state.project.builds = [build, ...(state.project.builds || [])];
+      $("build-prompt").value = ""; state.prompts.delete(state.project.project.id);
+      renderBuilds(); await refreshProject(); state.lastPoll = 0;
+      const latest = (state.project.builds || []).find((item) => item.id === build.id) || build;
+      if (latest.status === "failed") notice(buildFailureMessage(latest), true);
+      else if (latest.status === "review") notice("Your new version is ready. Try the preview and decide whether to keep it.");
+      else notice("Your request is saved. The builder's progress and result will appear below.");
+    } catch (error) { notice(`${error.message} Your idea is preserved below.`, true); }
+  });
+}
+function buildFailureMessage(build) {
+  const error = typeof build.error === "string" ? build.error : "";
+  if (/credit_balance_exhausted|insufficient_quota|credit balance/i.test(error)) return "The builder's AI account has no available credits. Your request is saved, but the build could not finish. Credits must be restored before trying again.";
+  return error || "The builder could not finish this request. Your request is saved so you can edit it and try again.";
+}
+async function decideBuild(build, action) {
+  if (action === "apply" && hasDrafts() && !confirm("You have unsaved code edits. Keep this generated version and discard those code drafts?")) return;
+  await operation(async () => {
+    const data = await api(projectApi(`/builds/${encodeURIComponent(build.id)}/${action}`), { method: "POST", body: "{}" });
+    if (action === "apply") { state.buffers.clear(); state.path = null; state.previewUrl = null; if (data.preview) state.project.preview = data.preview; }
+    await refreshProject();
+    notice(action === "apply" ? "Version kept. Tell us what you would like to improve next." : "Version discarded. Your saved website is unchanged.");
+  });
+}

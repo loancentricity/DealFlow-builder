@@ -13,6 +13,7 @@ const server = createApp({
   pool,
   workerUrl: process.env.PREVIEW_WORKER_URL || "http://127.0.0.1:3001",
   workerToken: process.env.PREVIEW_WORKER_TOKEN,
+  buildWorkerToken: process.env.BUILD_WORKER_TOKEN,
   previewPublicUrl: process.env.PREVIEW_PUBLIC_URL || "http://127.0.0.1:3001",
 });
 server.listen(

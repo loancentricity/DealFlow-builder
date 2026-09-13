@@ -29,7 +29,7 @@ export function createPreviewWorker({ token }) {
           throw invalid("Unauthorized.", 401);
         sweep();
         if (path === "/internal/snapshots" && req.method === "POST") {
-          const body = await readJson(req);
+          const body = await readJson(req, 1300000);
           if (
             !/^[a-f0-9]{64}$/.test(body.id || "") ||
             !Array.isArray(body.files) ||

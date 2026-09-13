@@ -50,7 +50,7 @@
           ><span class="breadcrumb-divider">/</span
           ><strong id="breadcrumb-name">Projects</strong>
         </div>
-        <span class="increment-badge">FIRST INCREMENT</span>
+        <span class="increment-badge">LOCAL PREVIEW</span>
       </header>
       <main id="main">
         <div
@@ -75,14 +75,14 @@
             <div class="starter-graphic" aria-hidden="true">&lt;/&gt;</div>
             <div>
               <span class="eyebrow">A SMALL START. A REAL FOUNDATION.</span>
-              <h2>Make your first change.</h2>
+              <h2>Your idea. A website you can try.</h2>
               <p>
-                Start with HTML, CSS, and JavaScript. Edit your source, save
-                your work, and open an isolated preview.
+                Describe what you want to build. Review the result, ask for changes,
+                and keep the version you love.
               </p>
             </div>
             <button class="secondary" id="use-starter">
-              Use starter <span aria-hidden="true">↗</span>
+              Start with an idea <span aria-hidden="true">↗</span>
             </button>
           </section>
           <div class="section-heading">
@@ -95,9 +95,8 @@
           <div class="foundation-note">
             <span aria-hidden="true">◇</span>
             <p>
-              <strong>A foundation you control.</strong> This increment supports
-              static projects. Imports, broader runtimes, and coordinated agents
-              are still ahead.
+              <strong>Your project stays yours.</strong> Build static websites in this first version.
+              Connected apps, databases, and imported projects are still ahead.
             </p>
           </div>
         </section>
@@ -107,13 +106,22 @@
               <p class="eyebrow">PROJECT WORKSPACE</p>
               <h1 id="project-title"></h1>
               <p class="runtime-label">
-                HTML / CSS / JavaScript <span>Static runtime</span>
+                Your website <span id="version-label">Starter · ready for your idea</span>
               </p>
             </div>
             <button class="secondary" id="back-projects">← All projects</button>
           </div>
+          <div class="owner-layout">
+            <section class="brief-panel">
+              <div class="brief-heading"><span class="eyebrow">YOU DESCRIBE. WE BUILD.</span><h2>What should we make?</h2><p>Tell us the audience, the look, and what people should be able to do.</p></div>
+              <form id="build-form"><label for="build-prompt">What would you like to build?</label><textarea id="build-prompt" maxlength="12000" placeholder="A warm, minimal website for my neighborhood coffee shop. Include our menu, opening hours, and a welcoming homepage." required></textarea><button class="primary full" id="request-build">Build my idea <span aria-hidden="true">↗</span></button></form>
+              <p class="build-scope">Static websites for now. Describe changes here anytime.</p>
+              <div class="builder-availability"><span class="status-dot" id="builder-dot"></span><div><strong id="builder-status">Checking builder…</strong><p id="builder-reason"></p></div></div>
+              <section id="build-current" class="build-current" aria-live="polite" hidden></section>
+              <div class="history-heading"><h3>Your requests</h3><span>Saved with this project</span></div><div id="build-history"><p class="muted">Your first idea starts here.</p></div>
+            </section>
           <div class="workbench">
-            <section class="files-panel">
+            <section class="files-panel" hidden>
               <div class="panel-heading">
                 <h2>Files</h2>
                 <span id="file-count"></span>
@@ -121,7 +129,7 @@
               <nav id="file-tree" aria-label="Source files"></nav>
               <p class="file-hint">Source changes persist when saved.</p>
             </section>
-            <section class="editor-panel">
+            <section class="editor-panel" hidden>
               <div class="editor-toolbar">
                 <div>
                   <strong id="editor-path">Choose a file</strong
@@ -158,9 +166,9 @@
             <section class="preview-panel">
               <div class="panel-heading">
                 <h2>
-                  <span class="status-dot" id="preview-dot"></span> Preview
+                  <span class="status-dot" id="preview-dot"></span> Your website
                 </h2>
-                <span id="preview-status">Stopped</span>
+                <div class="preview-heading-actions"><span id="preview-status">Stopped</span><button class="text-button" id="toggle-code" aria-expanded="false">Code</button></div>
               </div>
               <div class="preview-controls">
                 <button class="primary compact" id="start-preview">
@@ -189,11 +197,12 @@
                 ></iframe>
               </div>
               <div class="preview-footer">
-                Updates use saved files. Save your changes first.
+                Try your website here, then describe what you would change.
               </div>
             </section>
           </div>
-          <div class="project-bottom">
+          </div>
+          <details class="project-details"><summary>Project details &amp; checks</summary><div class="project-bottom">
             <section class="activity-panel">
               <div class="panel-heading">
                 <h2>Activity</h2>
@@ -217,8 +226,8 @@
             </section>
             <section class="agent-panel">
               <div class="panel-heading">
-                <h2>Agent execution</h2>
-                <span class="unavailable">Unavailable</span>
+                <h2>Builder connection</h2>
+                <span class="unavailable" id="agent-status">Unavailable</span>
               </div>
               <div class="agent-icon" aria-hidden="true">⌘</div>
               <p id="agent-reason">
@@ -226,10 +235,10 @@
                 coordinated execution.
               </p>
               <p class="muted">
-                Project activity is recorded. No agents are running.
+                Build requests and results are saved with this project.
               </p>
             </section>
-          </div>
+          </div></details>
         </section>
       </main>
       <footer class="app-footer">
@@ -250,7 +259,7 @@
           </button>
         </div>
         <h2>A new place to build.</h2>
-        <p class="muted">Create a project with a working static starter.</p>
+        <p class="muted">Give it a name and tell us your idea. You can refine it together.</p>
         <label for="project-name">Project name</label
         ><input
           id="project-name"
@@ -260,11 +269,12 @@
           placeholder="My next project"
           autocomplete="off"
         />
+        <label for="project-brief">What would you like to build? <span class="muted">(optional)</span></label><textarea id="project-brief" maxlength="12000" placeholder="Describe your website, who it is for, and the feel you want."></textarea>
         <div class="template-choice">
           <span aria-hidden="true">&lt;/&gt;</span>
           <div>
-            <strong>Static starter</strong
-            ><small>HTML, CSS, JavaScript · Ready to preview</small>
+            <strong>A website you can make your own</strong
+            ><small>Static websites · Preview before you keep a version</small>
           </div>
           <span aria-label="Selected">✓</span>
         </div>
