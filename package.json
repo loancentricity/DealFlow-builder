@@ -1,0 +1,19 @@
+{
+  "name": "dealflow-builder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "preview-worker": "node server/preview-worker.js",
+    "build-worker": "node server/build-worker.js",
+    "migrate": "node --env-file-if-exists=.env server/migrate.js",
+    "test": "node --env-file-if-exists=.env --test --test-isolation=none test/*.test.js",
+    "test:browser": "node --env-file-if-exists=.env test/browser.js",
+    "check": "node scripts/check.js",
+    "build": "node scripts/check.js"
+  },
+  "dependencies": { "pg": "^8.16.3" },
+  "devDependencies": { "playwright": "^1.55.0" }
+}

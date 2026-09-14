@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#0b1f3a" />
+    <title>DealFlow Builder · Workspace</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to workspace</a>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="DealFlow Builder home"
+        ><span class="brand-mark">D<span>↗</span></span
+        ><span>DealFlow <strong>Builder</strong></span></a
+      >
+      <div class="workspace-label">
+        YOUR WORKSPACE <span class="local-tag">LOCAL</span>
+      </div>
+      <button class="nav-item active" id="dashboard-button">
+        <span aria-hidden="true">▦</span> Projects
+        <span id="project-count">0</span>
+      </button>
+      <div class="sidebar-section">
+        <span>PROJECTS</span
+        ><button
+          class="icon-button"
+          id="sidebar-create"
+          aria-label="Create project"
+        >
+          +
+        </button>
+      </div>
+      <nav id="project-nav" aria-label="Projects">
+        <p class="nav-empty">Loading projects…</p>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="status-dot" id="health-dot"></span>
+        <div>
+          <strong id="health-label">Connecting</strong
+          ><small>Development environment</small>
+        </div>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <span class="breadcrumb">Workspace</span
+          ><span class="breadcrumb-divider">/</span
+          ><strong id="breadcrumb-name">Projects</strong>
+        </div>
+        <span class="increment-badge">LOCAL PREVIEW</span>
+      </header>
+      <main id="main">
+        <div
+          id="notice"
+          class="notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
+        <section id="dashboard">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">BUILD SOMETHING THAT'S YOURS</p>
+              <h1>Your projects.</h1>
+              <p class="lede">
+                From a first idea to a working preview. All in one workspace.
+              </p>
+            </div>
+            <div class="dashboard-actions"><button class="secondary" id="import-project">Import ZIP</button><input id="import-zip" class="sr-only" type="file" accept=".zip,application/zip" aria-label="Import project ZIP"><button class="primary" id="new-project">+ New project</button></div>
+          </div>
+          <section class="starter-banner">
+            <div class="starter-graphic" aria-hidden="true">&lt;/&gt;</div>
+            <div>
+              <span class="eyebrow">A SMALL START. A REAL FOUNDATION.</span>
+              <h2>Your idea. A website you can try.</h2>
+              <p>
+                Describe what you want to build. Review the result, ask for changes,
+                and keep the version you love.
+              </p>
+            </div>
+            <button class="secondary" id="use-starter">
+              Start with an idea <span aria-hidden="true">↗</span>
+            </button>
+          </section>
+          <div class="section-heading">
+            <h2>Project library</h2>
+            <span id="library-caption">Loading…</span>
+          </div>
+          <div id="project-grid" class="project-grid" aria-live="polite">
+            <div class="empty-card">Loading your workspace…</div>
+          </div>
+          <div class="foundation-note">
+            <span aria-hidden="true">◇</span>
+            <p>
+              <strong>Your project stays yours.</strong> Build static websites in this first version.
+              Import your source independently or start fresh. Server runtimes and hosted publishing are still ahead.
+            </p>
+          </div>
+        </section>
+        <section id="workspace" hidden>
+          <div class="workspace-heading">
+            <div>
+              <p class="eyebrow">PROJECT WORKSPACE</p>
+              <h1 id="project-title"></h1>
+              <p class="runtime-label">
+                Your website <span id="version-label">Starter · ready for your idea</span>
+              </p>
+            </div>
+            <div class="workspace-actions"><button class="secondary compact" id="back-projects">← Projects</button><button class="primary compact" id="publish-project">Publish</button></div>
+          </div>
+          <nav class="mobile-workspace-nav" aria-label="Workspace view"><button data-mobile-view="chat">Conversation</button><button data-mobile-view="preview" aria-pressed="true">Preview</button><button data-mobile-view="tools">Tools</button></nav>
+          <div class="owner-layout">
+            <section class="brief-panel">
+              <div class="brief-heading"><span class="conversation-symbol" aria-hidden="true">✧</span><h2>Build with DealFlow</h2><span class="conversation-label">Conversation</span></div>
+              <form id="build-form"><label for="build-prompt">Your message</label><textarea id="build-prompt" maxlength="60000" aria-describedby="build-prompt-help attachment-help" placeholder="Add a new page, change the layout, fix this step, or tell me what you want to improve…"></textarea><div class="attachment-actions"><button type="button" class="text-button" id="attach-zip">+ Attach files</button><span>or drop here · 250 MiB per file</span><input id="attachment-picker" class="sr-only" type="file" multiple aria-label="Attach files"></div><p id="attachment-help" class="attachment-help">Original files stay with this project. Selected excerpts go to your AI. OpenAI, Anthropic, and Google can read PNG/JPG/WebP/PDF: 20 MiB combined. Other files stay available to download; reading support varies.</p><div id="attachment-errors" role="status" aria-live="polite"></div><div id="upload-list" aria-label="File uploads" aria-live="polite"></div><div id="attachment-list" aria-label="Project attachments"></div><div class="composer-options"><label for="build-provider">AI provider</label><select id="build-provider" aria-describedby="provider-reason"><option value="openai">OpenAI · checking…</option></select></div><p id="provider-reason" class="provider-reason"></p><button class="primary full" id="request-build">Send <span aria-hidden="true">↗</span></button></form>
+              <p class="build-scope" id="build-prompt-help">Continue from the preview. Up to 60,000 characters.</p>
+              <div class="builder-availability"><span class="status-dot" id="builder-dot"></span><div><strong id="builder-status">Checking builder…</strong><p id="builder-reason"></p></div></div>
+              <section id="build-current" class="build-current" aria-live="polite" hidden></section>
+              <div class="history-heading"><h3>Conversation</h3><span>Saved with this project</span></div><div id="build-history" role="log" aria-label="Project conversation"><p class="muted">Your first idea starts here.</p></div>
+            </section>
+          <div class="workbench">
+            <section class="files-panel" hidden>
+              <div class="panel-heading">
+                <h2>Files</h2>
+                <span id="file-count"></span>
+              </div>
+              <nav id="file-tree" aria-label="Source files"></nav>
+              <p class="file-hint">Source changes persist when saved.</p>
+            </section>
+            <section class="editor-panel" hidden>
+              <div class="editor-toolbar">
+                <div>
+                  <strong id="editor-path">Choose a file</strong
+                  ><span id="save-state"></span>
+                </div>
+                <button class="primary compact" id="save-file" disabled>
+                  Save file
+                </button>
+              </div>
+              <label class="sr-only" for="code-editor">Source code</label
+              ><textarea
+                id="code-editor"
+                spellcheck="false"
+                autocapitalize="off"
+                autocomplete="off"
+                disabled
+                aria-describedby="editor-help"
+              ></textarea>
+              <div class="editor-footer">
+                <span id="editor-help">Plain-text source editor</span
+                ><span>Ctrl / ⌘ + S to save</span>
+              </div>
+              <div id="conflict" class="conflict" hidden>
+                <strong>This file changed elsewhere.</strong>
+                <p>
+                  Your draft is preserved. Copy it before loading the latest
+                  saved version, then reconcile your changes.
+                </p>
+                <button class="secondary compact" id="load-latest">
+                  Load latest saved version
+                </button>
+              </div>
+            </section>
+            <section class="preview-panel">
+              <div class="panel-heading">
+                <h2>
+                  <span class="status-dot" id="preview-dot"></span> Your website
+                </h2>
+                <div class="preview-heading-actions"><span id="preview-status">Stopped</span><button class="text-button" id="toggle-code" aria-expanded="false">Code</button></div>
+              </div>
+              <div class="preview-controls">
+                <button class="primary compact" id="start-preview">
+                  Start preview</button
+                ><button class="secondary compact" id="update-preview" disabled>
+                  Update</button
+                ><button class="secondary compact" id="stop-preview" disabled>
+                  Stop
+                </button>
+              </div>
+              <div class="preview-viewport">
+                <div id="preview-empty">
+                  <span class="preview-symbol" aria-hidden="true">↗</span>
+                  <h3>Your work, running.</h3>
+                  <p>
+                    Start a preview to see the saved version of your project.
+                  </p>
+                  <small>Isolated static runtime</small>
+                </div>
+                <iframe
+                  id="preview-frame"
+                  title="Isolated project preview"
+                  sandbox="allow-scripts"
+                  referrerpolicy="no-referrer"
+                  hidden
+                ></iframe>
+              </div>
+              <div class="preview-footer">
+                Try your website here, then describe what you would change.
+              </div>
+            </section>
+          </div>
+          <aside class="tool-drawer" aria-label="Project tools">
+            <div class="tool-drawer-heading"><strong>Workspace tools</strong><span id="storage-summary"></span></div>
+            <nav class="tool-tabs" role="tablist" aria-label="Project tools">
+              <button role="tab" id="tab-library" aria-controls="tool-library" aria-selected="true" data-tool="library">Library</button><button role="tab" id="tab-files" aria-controls="tool-files" aria-selected="false" data-tool="files">Files</button><button role="tab" id="tab-activity" aria-controls="tool-activity" aria-selected="false" data-tool="activity">Activity</button><button role="tab" id="tab-checkpoints" aria-controls="tool-checkpoints" aria-selected="false" data-tool="checkpoints">Checkpoints</button><button role="tab" id="tab-connections" aria-controls="tool-connections" aria-selected="false" data-tool="connections">Connections</button><button role="tab" id="tab-publish" aria-controls="tool-publish" aria-selected="false" data-tool="publish">Publish</button>
+            </nav>
+            <section id="tool-library" class="tool-content" role="tabpanel" aria-labelledby="tab-library"><label for="library-search">Find a project</label><input id="library-search" type="search" placeholder="Search your library"><div id="tool-project-list"></div><div class="tool-divider"></div><h3>This project</h3><form id="rename-form"><label for="rename-name">Project name</label><input id="rename-name" maxlength="80" required><button class="secondary compact">Rename project</button></form><form id="duplicate-form"><label for="duplicate-name">Copy name</label><input id="duplicate-name" maxlength="80" placeholder="A new name for your copy" required><button class="secondary compact">Duplicate project</button></form></section>
+            <section id="tool-files" class="tool-content files-tool" role="tabpanel" aria-labelledby="tab-files" hidden><div class="tool-section-heading"><h3>Project files</h3><button class="text-button" id="delete-file">Delete selected</button></div><form id="add-file-form"><label class="sr-only" for="new-file-path">New file path</label><input id="new-file-path" placeholder="New file, e.g. about.html" required maxlength="240"><button class="secondary compact">Add file</button></form><div id="source-tool-host"></div></section>
+            <section id="tool-activity" class="tool-content" role="tabpanel" aria-labelledby="tab-activity" hidden><div id="activity-tool-host"></div></section>
+            <section id="tool-checkpoints" class="tool-content" role="tabpanel" aria-labelledby="tab-checkpoints" hidden><h3>A place to come back to</h3><p class="muted">Save a checkpoint before a big change. Restore its saved files whenever you need to.</p><form id="checkpoint-form"><label for="checkpoint-label">Checkpoint name</label><input id="checkpoint-label" required maxlength="100" placeholder="Before the homepage redesign"><button class="primary compact">Save checkpoint</button></form><div id="checkpoint-list"></div></section>
+            <section id="tool-connections" class="tool-content" role="tabpanel" aria-labelledby="tab-connections" hidden><div class="tool-section-heading"><h3>Connections</h3><button class="text-button" id="refresh-connections">Refresh</button></div><p class="muted">Actual services available to this workspace. Credentials stay outside the browser.</p><div id="connections-list"><p class="muted">Open this tool to check available services.</p></div><div id="agent-tool-host"></div></section>
+            <section id="tool-publish" class="tool-content" role="tabpanel" aria-labelledby="tab-publish" hidden><span class="publish-symbol" aria-hidden="true">↗</span><h3>Your next step: out into the world.</h3><p class="muted">No publishing provider is connected. Your preview runs locally; it is not a public deployment.</p><p class="muted">Download your saved project as a ZIP to keep a portable copy or deploy with a provider you choose.</p><a class="primary download-project" id="download-project" download>Download project</a><p class="tool-footnote">Includes saved source. Save code edits first.</p></section>
+          </aside>
+          </div>
+          <details class="project-details"><summary>Project details &amp; checks</summary><div class="project-bottom">
+            <section class="activity-panel">
+              <div class="panel-heading">
+                <h2>Activity</h2>
+                <button class="text-button" id="refresh-project">
+                  Refresh
+                </button>
+              </div>
+              <ol id="activity-list"></ol>
+            </section>
+            <section class="test-panel">
+              <div class="panel-heading">
+                <h2>Starter checks</h2>
+                <button class="secondary compact" id="run-tests">
+                  Run checks
+                </button>
+              </div>
+              <p class="muted">Validate the saved starter files.</p>
+              <div id="test-results" aria-live="polite">
+                <p class="muted">No checks run in this session.</p>
+              </div>
+            </section>
+            <section class="agent-panel">
+              <div class="panel-heading">
+                <h2>Builder connection</h2>
+                <span class="unavailable" id="agent-status">Unavailable</span>
+              </div>
+              <div class="agent-icon" aria-hidden="true">⌘</div>
+              <p id="agent-reason">
+                Connect an agent provider and isolated worker to enable
+                coordinated execution.
+              </p>
+              <p class="muted">
+                Build requests and results are saved with this project.
+              </p>
+            </section>
+          </div></details>
+        </section>
+      </main>
+      <footer class="app-footer">
+        <span>DEALFLOW BUILDER</span><span>Your source. Your workspace.</span>
+      </footer>
+    </div>
+    <dialog id="create-dialog">
+      <form id="create-form">
+        <div class="dialog-heading">
+          <span class="eyebrow">START BUILDING</span
+          ><button
+            type="button"
+            class="icon-button"
+            id="close-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <h2>A new place to build.</h2>
+        <p class="muted">Give it a name and tell us your idea. You can refine it together.</p>
+        <label for="project-name">Project name</label
+        ><input
+          id="project-name"
+          name="name"
+          required
+          maxlength="80"
+          placeholder="My next project"
+          autocomplete="off"
+        />
+        <label for="project-brief">What would you like to build? <span class="muted">(optional)</span></label><textarea id="project-brief" maxlength="60000" aria-describedby="project-brief-help" placeholder="Describe your website, who it is for, and the feel you want."></textarea><p class="build-scope" id="project-brief-help">Up to 60,000 characters.</p>
+        <div class="template-choice">
+          <span aria-hidden="true">&lt;/&gt;</span>
+          <div>
+            <strong>A website you can make your own</strong
+            ><small>Static websites · Preview before you keep a version</small>
+          </div>
+          <span aria-label="Selected">✓</span>
+        </div>
+        <p id="create-error" class="form-error" role="alert" hidden></p>
+        <button class="primary full" id="create-submit">
+          Create project →
+        </button>
+      </form>
+    </dialog>
+  </body>
+</html>

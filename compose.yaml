@@ -1,0 +1,67 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER locally}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD locally}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB locally}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  app:
+    build:
+      context: .
+      target: control
+    networks: [database, preview-link]
+    volumes:
+      - attachment-data:/app/data/attachments
+    command: ["sh", "-c", "npm run migrate && npm start"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:?Set POSTGRES_DB}
+      HOST: 0.0.0.0
+      PORT: "3000"
+      PREVIEW_WORKER_URL: http://preview:3001
+      PREVIEW_PUBLIC_URL: http://localhost:3001
+      PREVIEW_WORKER_TOKEN: ${PREVIEW_WORKER_TOKEN:?Set a locally generated preview worker token}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      preview:
+        condition: service_started
+  preview:
+    build:
+      context: .
+      target: preview
+    networks: [preview-link]
+    command: ["node", "server/preview-worker.js"]
+    environment:
+      PREVIEW_HOST: 0.0.0.0
+      PREVIEW_PORT: "3001"
+      PREVIEW_WORKER_TOKEN: ${PREVIEW_WORKER_TOKEN:?Set a locally generated preview worker token}
+    ports:
+      - "127.0.0.1:3001:3001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+volumes:
+  postgres-data:
+  attachment-data:
+networks:
+  database:
+    internal: true
+  preview-link:
+    # A normal bridge is needed for loopback-published UI/preview ports.
+    # PostgreSQL remains on its separate internal-only network.
+    driver: bridge
