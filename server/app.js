@@ -91,6 +91,7 @@ export function createApp({
     pool, workerToken: buildWorkerToken,
     captureCheckpoint: checkpoints.capture,
     readAttachmentContext: attachments.readContext,
+    readAttachmentMedia: attachments.readMedia,
     publishSnapshot: (id, files) => worker("/internal/snapshots", "POST", { id, files }),
     removeSnapshot: id => worker(`/internal/snapshots/${id}`, "DELETE"),
     previewUrl: id => publicPreview(id).url,

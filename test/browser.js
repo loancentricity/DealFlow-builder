@@ -83,6 +83,19 @@ try {
   await page.getByLabel(`Use ${dropName} with message`,{exact:true}).waitFor({state:'visible'});
   assert.equal(await page.locator('#build-prompt').inputValue(),unsent,'dropping preserves the typed message');
   await dropped.dispose();
+  const mixedFiles = [
+    {name:'synthetic-notes.txt',mimeType:'text/plain',buffer:Buffer.from('Synthetic attachment notes')},
+    {name:'synthetic-reference.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jD1kAAAAASUVORK5CYII=','base64')},
+    {name:'synthetic-brief.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF')},
+  ];
+  await page.locator('#attachment-picker').setInputFiles(mixedFiles);
+  for (const fixture of mixedFiles) {
+    await page.getByLabel(`Use ${fixture.name} with message`,{exact:true}).waitFor({state:'visible'});
+  }
+  assert.equal(await page.locator('#build-prompt').inputValue(),unsent,'mixed file uploads preserve the draft');
+  const mixedSaved=await (await page.request.get(`${base}/api/projects/${project.id}`)).json();
+  assert.equal(mixedSaved.attachments.length,5,'three files queue and store even with a two-upload server limit');
+  assert.deepEqual(mixedSaved.files,detail.files,'mixed attachments do not overwrite project source');
   await page.locator("#build-prompt").fill("");
   const file = detail.files.find((file) => file.path === "index.html");
   const concurrent = await page.request.put(

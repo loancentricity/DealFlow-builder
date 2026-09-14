@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { runStaticChecks, validateFile } from "./domain.js";
-import { createProviderRegistry } from "./model-providers.js";
+import { createProviderRegistry, splitProviderInput } from "./model-providers.js";
 
 const buildSchema = {
   type: "object", additionalProperties: false, required: ["summary", "files"],
@@ -39,10 +39,12 @@ export function createOpenAIProvider({ apiKey, baseUrl = "https://api.openai.com
     catch { throw new Error("Model service returned invalid JSON."); }
   }
   async function structured(instructions, input, schema, name) {
+    const {textInput,media}=splitProviderInput(input);
+    const content=media.length?[{role:'user',content:[{type:'input_text',text:JSON.stringify(textInput)},...media.map(file=>file.media_type==='application/pdf'?{type:'input_file',filename:file.name,file_data:`data:application/pdf;base64,${file.data}`}:{type:'input_image',image_url:`data:${file.media_type};base64,${file.data}`,detail:'auto'})]}]:JSON.stringify(textInput);
     const response = await request("/responses", {
       model, store: false, tools: [], max_output_tokens: 24000,
       reasoning: { effort: "low" },
-      instructions, input: JSON.stringify(input),
+      instructions, input: content,
       text: { format: { type: "json_schema", name, strict: true, schema } },
     });
     if (response.status && response.status !== "completed") throw new Error("Model response was incomplete. Try a smaller change.");
@@ -100,11 +102,19 @@ export async function runBuildWorker({ appUrl, token, provider, providers, signa
         const report = (type, message) => send(`${build.id}/event`, { lease_token: build.lease_token, type, message });
         try {
           if (!selected?.available || !selected.adapter) throw new Error("Selected model provider is unavailable.");
+          const media = [];
+          const mediaReferences = build.attachments?.media || [];
+          if (mediaReferences.reduce((sum,item) => sum + Number(item.bytes || 0),0) > 20*1024*1024)
+            throw new Error('Selected image/PDF content exceeds the 20 MiB AI input limit. Select fewer or smaller attachments.');
+          for (const reference of mediaReferences) {
+            const response = await send(`${build.id}/media/${reference.attachment_id}`, {lease_token:build.lease_token});
+            media.push(response.media);
+          }
           await report("GENERATION_STARTED", "AI builder is creating the requested changes.");
           let candidate, review, feedback;
           for (let attempt = 0; attempt < 2; attempt++) {
             const baseline = candidate?.files || build.source_files;
-            candidate = await selected.adapter.build({ request: build.prompt, previous_requests: build.history || [], source_files: baseline, attachments: build.attachments || [], feedback });
+            candidate = await selected.adapter.build({ request: build.prompt, previous_requests: build.history || [], source_files: baseline, attachments: build.attachments || [], media, feedback });
             if (!Array.isArray(candidate.files) || !candidate.files.length || candidate.files.length > 30) throw new Error("Model returned an invalid file list.");
             candidate.files.forEach(file => validateFile({ ...file, version: 1 }));
             const merged = new Map(baseline.map(file => [file.path, file]));
@@ -113,7 +123,7 @@ export async function runBuildWorker({ appUrl, token, provider, providers, signa
             candidate.files = files;
             const checks = runStaticChecks(files);
             await report("REVIEW_STARTED", "A separate AI pass is reviewing the candidate source and requested behavior.");
-            review = await selected.adapter.review({ request: build.prompt, previous_requests: build.history || [], files, attachments: build.attachments || [], structural_checks: checks });
+            review = await selected.adapter.review({ request: build.prompt, previous_requests: build.history || [], files, attachments: build.attachments || [], media, structural_checks: checks });
             if (checks.passed && review.approved) break;
             feedback = { checks, review };
             if (attempt === 0) await report("REPAIR_STARTED", "The review found issues. The builder is making one correction pass.");

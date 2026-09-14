@@ -58,8 +58,8 @@ test('ZIP attachments preserve large originals, enforce project scope, and exclu
   };
   for(let index=0;index<2;index++) {const created=await api('/api/projects','POST',{name:`Synthetic attachment project ${index}`});assert.equal(created.status,201);ids.push(created.data.project.id);}
   const root=`/api/projects/${ids[0]}`;
-  const upload=async(bytes,name='synthetic-original.zip')=>{
-    const response=await fetch(base+root+'/attachments',{method:'POST',headers:{'Content-Type':'application/zip','X-File-Name':encodeURIComponent(name)},body:bytes});
+  const upload=async(bytes,name='synthetic-original.zip',type='application/zip')=>{
+    const response=await fetch(base+root+'/attachments',{method:'POST',headers:{'Content-Type':type,'X-File-Name':encodeURIComponent(name)},body:bytes});
     return {status:response.status,data:await response.json()};
   };
   const secret='SYNTHETIC_SECRET_MUST_NOT_REACH_BUILD';
@@ -102,5 +102,38 @@ test('ZIP attachments preserve large originals, enforce project scope, and exclu
   assert.ok(!context.includes(secret),'secret-file values never reach the build claim');
   assert.ok(context.length<200000,'large binary original is not included in model context');
   assert.equal((await api(`${root}/attachments`)).data.attachments.length,1,'failed uploads create no attachment rows');
+  await api(`${root}/builds/${claimed.data.build.id}/cancel`,'POST',{});
+  const fixtures = [
+    {name:'notes.txt',type:'text/plain',data:Buffer.from('Synthetic plain text requirement: use a blue header.')},
+    {name:'reference.png',type:'image/png',data:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jD1kAAAAASUVORK5CYII=','base64')},
+    {name:'brief.pdf',type:'application/pdf',data:Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF')},
+    {name:'opaque.bin',type:'application/octet-stream',data:Buffer.from([0,1,2,255])},
+  ];
+  const stored = [];
+  for (const fixture of fixtures) {
+    const result=await upload(fixture.data,fixture.name,fixture.type);
+    assert.equal(result.status,201,JSON.stringify(result.data));
+    assert.equal(result.data.attachment.media_type,fixture.type);
+    const original=await fetch(new URL(result.data.attachment.download_url,base));
+    assert.match(original.headers.get('content-disposition'),/^attachment;/);
+    assert.deepEqual(Buffer.from(await original.arrayBuffer()),fixture.data);
+    stored.push(result.data.attachment);
+  }
+  const mediaQueued=await api(`${root}/builds`,'POST',{prompt:'Use these synthetic text and visual references',attachment_ids:stored.map(item=>item.id)});
+  assert.equal(mediaQueued.status,201);
+  const mediaClaim=await api('/internal/build-worker/claim','POST',{},auth);
+  const job=mediaClaim.data.build;
+  assert.ok(JSON.stringify(job.attachments).includes('Synthetic plain text requirement'));
+  assert.equal(job.attachments.media.length,2,'images and PDFs are represented as authenticated media references');
+  assert.ok(!JSON.stringify(job.attachments).includes(fixtures[1].data.toString('base64')),'base64 is not put in text context');
+  const mediaPath=`/internal/build-worker/${job.id}/media/${stored[1].id}`;
+  assert.equal((await api(mediaPath,'POST',{lease_token:job.lease_token})).status,401);
+  assert.equal((await api(mediaPath,'POST',{lease_token:'stale'},auth)).status,409);
+  const delivered=await api(mediaPath,'POST',{lease_token:job.lease_token},auth);
+  assert.equal(delivered.status,200);
+  assert.equal(delivered.data.media.media_type,'image/png');
+  assert.deepEqual(Buffer.from(delivered.data.media.data,'base64'),fixtures[1].data);
+  const notSelected=await api(`/internal/build-worker/${job.id}/media/${attachment.id}`,'POST',{lease_token:job.lease_token},auth);
+  assert.equal(notSelected.status,404);
 });
 

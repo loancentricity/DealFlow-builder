@@ -17,6 +17,21 @@ function parsed(value) {
   try { const data=typeof value === "string"?JSON.parse(value):value; if(!data||typeof data!=="object"||Array.isArray(data)) throw new Error(); return data; }
   catch { throw new Error("Model returned invalid structured output."); }
 }
+export function splitProviderInput(input) {
+  const {media: supplied = [], ...textInput}=input;
+  if(!Array.isArray(supplied) || supplied.length>20) throw new Error('Provide at most 20 native image or PDF attachments.');
+  const media=supplied.map(file=>{
+    const media_type=file?.media_type==='image/jpg'?'image/jpeg':file?.media_type;
+    if(!['image/png','image/jpeg','image/webp','application/pdf'].includes(media_type))
+      throw new Error('Native attachment type is unsupported. Use PNG, JPEG, WebP or PDF.');
+    if(typeof file.data!=='string' || !file.data.length || file.data.length%4!==0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.data))
+      throw new Error('Native attachment encoding is invalid.');
+    if(Buffer.byteLength(file.data,'base64')>20*1024*1024) throw new Error('Native image and PDF attachments must not exceed 20 MiB each.');
+    if(typeof file.name!=='string' || !file.name || file.name.length>200 || /[\x00-\x1f\x7f]/.test(file.name)) throw new Error('Native attachment filename is invalid.');
+    return {name:file.name,media_type,data:file.data};
+  });
+  return {textInput,media};
+}
 export function createModelProvider({id,apiKey,baseUrl,model,fetchImpl=fetch}) {
   const definition=providerDefinitions.find(item=>item.id===id);
   if(!definition || id==="openai") throw new Error("Unsupported provider adapter.");
@@ -34,19 +49,23 @@ export function createModelProvider({id,apiKey,baseUrl,model,fetchImpl=fetch}) {
     try { return await response.json(); } catch { throw new Error("Model service returned invalid JSON."); }
   }
   async function structured(instructions,input,schema) {
+    const {textInput,media}=splitProviderInput(input);
+    if(media.length && !['anthropic','google'].includes(id)) throw new Error(`${definition.name} image/PDF input is not implemented. Choose OpenAI, Anthropic or Google for these attachments.`);
     const prompt=`${instructions} ${constraints} Return only a JSON object matching this schema: ${JSON.stringify(schema)}`;
     if(id==="anthropic") {
-      const data=await request("/messages",{model,max_tokens:24000,system:prompt,messages:[{role:"user",content:JSON.stringify(input)}]});
+      // Native source blocks keep binary data outside the JSON text prompt.
+      const content=media.length?[...media.map(file=>({type:file.media_type==='application/pdf'?'document':'image',source:{type:'base64',media_type:file.media_type,data:file.data}})),{type:'text',text:JSON.stringify(textInput)}]:JSON.stringify(textInput);
+      const data=await request("/messages",{model,max_tokens:24000,system:prompt,messages:[{role:"user",content}]});
       if(data.stop_reason!=="end_turn") throw new Error("Model response was incomplete. Try a smaller change.");
       return parsed(data.content?.filter(item=>item.type==="text").map(item=>item.text).join(""));
     }
     if(id==="google") {
-      const data=await request(`/models/${encodeURIComponent(model)}:generateContent`,{systemInstruction:{parts:[{text:prompt}]},contents:[{role:"user",parts:[{text:JSON.stringify(input)}]}],generationConfig:{maxOutputTokens:24000,responseMimeType:"application/json"}});
+      const data=await request(`/models/${encodeURIComponent(model)}:generateContent`,{systemInstruction:{parts:[{text:prompt}]},contents:[{role:"user",parts:[{text:JSON.stringify(textInput)},...media.map(file=>({inlineData:{mimeType:file.media_type,data:file.data}}))]}],generationConfig:{maxOutputTokens:24000,responseMimeType:"application/json"}});
       const candidate=data.candidates?.[0];
       if(candidate?.finishReason!=="STOP") throw new Error("Model response was incomplete. Try a smaller change.");
       return parsed(candidate.content?.parts?.filter(part=>!part.thought).map(part=>part.text||"").join(""));
     }
-    const data=await request("/chat/completions",{model,max_tokens:24000,messages:[{role:"system",content:prompt},{role:"user",content:JSON.stringify(input)}],response_format:{type:"json_object"},thinking:{type:"disabled"}});
+    const data=await request("/chat/completions",{model,max_tokens:24000,messages:[{role:"system",content:prompt},{role:"user",content:JSON.stringify(textInput)}],response_format:{type:"json_object"},thinking:{type:"disabled"}});
     if(data.choices?.[0]?.finish_reason!=="stop") throw new Error("Model response was incomplete. Try a smaller change.");
     return parsed(data.choices[0].message?.content);
   }

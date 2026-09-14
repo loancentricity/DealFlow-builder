@@ -6,6 +6,22 @@ const candidate = { summary: 'Test fixture output', files: [{path:'index.html',c
 const completed = value => ({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]});
 const fixture = value => async () => new Response(JSON.stringify(value), {status:200,headers:{'Content-Type':'application/json'}});
 
+test('OpenAI sends image and PDF bytes as native parts for build and review, never JSON text',async()=>{
+  const requests=[];
+  const provider=createOpenAIProvider({apiKey:'synthetic',fetchImpl:async(url,options)=>{
+    requests.push(JSON.parse(options.body));return new Response(JSON.stringify(completed(candidate)),{status:200});
+  }});
+  const media=[{name:'sample.png',media_type:'image/png',data:Buffer.from('synthetic image bytes').toString('base64')},{name:'sample.pdf',media_type:'application/pdf',data:Buffer.from('%PDF synthetic bytes').toString('base64')}];
+  for(const operation of ['build','review']) await provider[operation]({request:'Inspect attachments',media});
+  for(const request of requests) {
+    const parts=request.input[0].content;
+    assert.deepEqual(JSON.parse(parts[0].text),{request:'Inspect attachments'});
+    assert.equal(parts[1].type,'input_image');assert.equal(parts[1].image_url,`data:image/png;base64,${media[0].data}`);
+    assert.equal(parts[2].type,'input_file');assert.equal(parts[2].filename,'sample.pdf');assert.equal(parts[2].file_data,`data:application/pdf;base64,${media[1].data}`);
+    for(const file of media) assert.ok(!parts[0].text.includes(file.data));
+  }
+});
+
 test('provider sends strict structured Responses requests without tools or storage', async () => {
   const requests=[];
   const provider=createOpenAIProvider({apiKey:'synthetic-test-key',model:'fixture-model',baseUrl:'https://model.example/v1/',fetchImpl:async (url,options)=>{

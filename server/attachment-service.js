@@ -9,6 +9,9 @@ import { json } from './http.js';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_UPLOAD=250*1024*1024, PROJECT_QUOTA=1024*1024*1024, CONTEXT_LIMIT=200000;
+const MEDIA_LIMIT=20*1024*1024;
+const MEDIA_TYPES=new Set(['image/png','image/jpeg','image/webp','application/pdf']);
+const TEXT_EXTENSION=/\.(?:html|css|js|jsx|ts|tsx|json|md|txt|csv|xml|py|sql|yaml|yml|toml|log|ini|sh)$/i;
 let uploads=0;
 const decoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
 function decode(bytes) { try { return decoder.decode(bytes); } catch { throw invalid('ZIP filenames must use UTF-8.'); } }
@@ -25,6 +28,24 @@ function excluded(path) {
 }
 function hasSecret(content) { return /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/.test(content); }
 function crc32(bytes) { let crc=0xffffffff; for(const byte of bytes) { crc^=byte; for(let bit=0;bit<8;bit++) crc=(crc>>>1)^((crc&1)?0xedb88320:0); } return (crc^0xffffffff)>>>0; }
+async function detectType(file,name,size) {
+  const head=await readAt(file,0,Math.min(size,16));
+  if(/\.zip$/i.test(name) || head.subarray(0,2).toString('ascii')==='PK') return 'application/zip';
+  if(head.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png';
+  if(head.length>=3 && head[0]===255 && head[1]===216 && head[2]===255) return 'image/jpeg';
+  if(['GIF87a','GIF89a'].includes(head.subarray(0,6).toString('ascii'))) return 'image/gif';
+  if(head.subarray(0,4).toString('ascii')==='RIFF' && head.subarray(8,12).toString('ascii')==='WEBP') return 'image/webp';
+  if(head.subarray(0,5).toString('ascii')==='%PDF-') return 'application/pdf';
+  if(TEXT_EXTENSION.test(name)) {
+    // Check UTF-8 with bounded chunks, including large text attachments.
+    const utf8=new TextDecoder('utf-8',{fatal:true});
+    try {
+      for(let at=0;at<size;at+=65536) if(utf8.decode(await readAt(file,at,Math.min(65536,size-at)),{stream:true}).includes('\0')) return 'application/octet-stream';
+      utf8.decode(); return 'text/plain';
+    } catch { return 'application/octet-stream'; }
+  }
+  return 'application/octet-stream';
+}
 
 // Validate metadata using positioned reads. Large entry payloads stay on disk.
 async function inspectZip(file,size) {
@@ -67,9 +88,9 @@ async function inspectZip(file,size) {
 
 export function createAttachmentService({pool,storageRoot=process.env.ATTACHMENT_STORAGE_DIR || 'data/attachments'}) {
   const root=resolve(storageRoot);
-  const publicRow=row=>({id:row.id,name:row.name,bytes:Number(row.bytes),status:'stored',created_at:row.created_at,download_url:`/api/projects/${row.project_id}/attachments/${row.id}/download`});
-  const list=async projectId=>(await pool.query('SELECT id,project_id,name,bytes,created_at FROM attachments WHERE project_id=$1 ORDER BY created_at DESC',[projectId])).rows.map(publicRow);
-  const diskPath=row=>{ if(!/^[0-9a-f-]{36}\.zip$/.test(row.disk_name)) throw invalid('Attachment storage reference is invalid.',500); return join(root,row.disk_name); };
+  const publicRow=row=>({id:row.id,name:row.name,bytes:Number(row.bytes),media_type:row.media_type,status:'stored',created_at:row.created_at,download_url:`/api/projects/${row.project_id}/attachments/${row.id}/download`});
+  const list=async projectId=>(await pool.query('SELECT id,project_id,name,bytes,media_type,created_at FROM attachments WHERE project_id=$1 ORDER BY created_at DESC',[projectId])).rows.map(publicRow);
+  const diskPath=row=>{ if(!/^[0-9a-f-]{36}\.(?:zip|blob)$/.test(row.disk_name)) throw invalid('Attachment storage reference is invalid.',500); return join(root,row.disk_name); };
   const handle=async(req,res,path)=>{
     const match=path.match(/^\/api\/projects\/([^/]+)\/attachments(?:\/([^/]+)\/download)?$/); if(!match) return false;
     const [,projectId,id]=match; if(!UUID.test(projectId)||(id&&!UUID.test(id))) throw invalid('Invalid identifier.');
@@ -78,17 +99,16 @@ export function createAttachmentService({pool,storageRoot=process.env.ATTACHMENT
       const file=await open(diskPath(row),'r').catch(()=>{throw invalid('Attachment file is unavailable.',404);});
       await file.close();
       const filename=row.name.replace(/[^a-zA-Z0-9_.-]/g,'-');
-      res.writeHead(200,{'Content-Type':'application/zip','Content-Length':row.bytes,'Content-Disposition':`attachment; filename="${filename}"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+      res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Length':row.bytes,'Content-Disposition':`attachment; filename="${filename}"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
       try { await pipeline(createReadStream(diskPath(row)),res); } catch { res.destroy(); }
       return true;
     }
     if(id) throw invalid('Method not allowed.',405);
     if(req.method==='GET') { if(!(await pool.query('SELECT id FROM projects WHERE id=$1',[projectId])).rowCount) throw invalid('Project not found.',404); json(res,200,{attachments:await list(projectId)}); return true; }
     if(req.method!=='POST') throw invalid('Method not allowed.',405);
-    if(req.headers['content-type']?.split(';')[0]!=='application/zip') throw invalid('Expected a ZIP attachment.',415);
-    if(Number(req.headers['content-length']||0)>MAX_UPLOAD) throw invalid('ZIP attachments are limited to 250 MiB.',413);
+    if(Number(req.headers['content-length']||0)>MAX_UPLOAD) throw invalid('Attachments are limited to 250 MiB.',413);
     if(uploads>=2) throw invalid('Two uploads are already in progress. Retry when one finishes.',429);
-    let name; try { name=decodeURIComponent(req.headers['x-file-name']||req.headers['x-attachment-name']||'attachment.zip'); } catch { throw invalid('Invalid attachment name.'); }
+    let name; try { name=decodeURIComponent(req.headers['x-file-name']||req.headers['x-attachment-name']||'attachment'); } catch { throw invalid('Invalid attachment name.'); }
     if(!name.trim() || name.length>200 || /[\x00-\x1f\x7f/\\]/.test(name)) throw invalid('Use a filename of 1–200 characters without path separators.');
     uploads++; let client,file,target,committed=false;
     try {
@@ -96,32 +116,48 @@ export function createAttachmentService({pool,storageRoot=process.env.ATTACHMENT
       const usage=(await pool.query('SELECT count(*)::int AS count,COALESCE(sum(bytes),0)::bigint AS bytes FROM attachments WHERE project_id=$1',[projectId])).rows[0];
       if(usage.count>=20) throw invalid('This project already has 20 attachments.',413);
       const remaining=PROJECT_QUOTA-Number(usage.bytes); if(remaining<=0) throw invalid('Project attachment storage exceeds 1 GiB.',413);
-      await mkdir(root,{recursive:true}); const attachmentId=randomUUID(),disk_name=`${attachmentId}.zip`; target=join(root,disk_name); file=await open(target,'wx',0o600);
+      await mkdir(root,{recursive:true}); const attachmentId=randomUUID(),disk_name=`${attachmentId}.${/\.zip$/i.test(name)?'zip':'blob'}`; target=join(root,disk_name); file=await open(target,'wx',0o600);
       let bytes=0;
       for await(const chunk of req) {
         bytes+=chunk.length; if(bytes>MAX_UPLOAD || bytes>remaining) throw invalid('Attachment or project storage limit exceeded.',413);
         let offset=0; while(offset<chunk.length) { const result=await file.write(chunk,offset,chunk.length-offset); offset+=result.bytesWritten; }
       }
-      await file.close(); file=await open(target,'r'); const inventory=await inspectZip(file,bytes); await file.close(); file=null;
+      if(!bytes) throw invalid('The attachment is empty.');
+      await file.close(); file=await open(target,'r');
+      const media_type=await detectType(file,name,bytes);
+      const inventory=media_type==='application/zip'?await inspectZip(file,bytes):[];
+      await file.close(); file=null;
       // Keep the row lock short: uploads and positioned validation must not block project reads.
       client=await pool.connect(); await client.query('BEGIN');
       if(!(await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE',[projectId])).rowCount) throw invalid('Project not found.',404);
       const finalUsage=(await client.query('SELECT count(*)::int AS count,COALESCE(sum(bytes),0)::bigint AS bytes FROM attachments WHERE project_id=$1',[projectId])).rows[0];
       if(finalUsage.count>=20 || Number(finalUsage.bytes)+bytes>PROJECT_QUOTA) throw invalid('Project attachment count or storage limit exceeded.',413);
-      const row=(await client.query('INSERT INTO attachments(id,project_id,name,bytes,disk_name,inventory) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[attachmentId,projectId,name.trim(),bytes,disk_name,JSON.stringify(inventory)])).rows[0];
-      await client.query('INSERT INTO events(project_id,type,detail) VALUES($1,$2,$3)',[projectId,'ATTACHMENT_STORED',{message:'Stored ZIP attachment locally without extracting or executing it.',attachment_id:attachmentId,name:name.trim(),bytes}]);
+      const row=(await client.query('INSERT INTO attachments(id,project_id,name,bytes,disk_name,inventory,media_type) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[attachmentId,projectId,name.trim(),bytes,disk_name,JSON.stringify(inventory),media_type])).rows[0];
+      await client.query('INSERT INTO events(project_id,type,detail) VALUES($1,$2,$3)',[projectId,'ATTACHMENT_STORED',{message:'Stored attachment locally without executing it.',attachment_id:attachmentId,name:name.trim(),bytes,media_type}]);
       await client.query('COMMIT'); committed=true; json(res,201,{attachment:publicRow(row)}); return true;
     } catch(error) { if(client) await client.query('ROLLBACK').catch(()=>{}); throw error; }
     finally { if(file) await file.close().catch(()=>{}); if(target&&!committed) await unlink(target).catch(()=>{}); client?.release(); uploads--; }
   };
   const readContext=async(projectId,ids)=>{
     if(!Array.isArray(ids)||ids.length>20||ids.some(id=>typeof id!=='string'||!UUID.test(id))) throw invalid('Select valid project attachment identifiers.');
-    const unique=[...new Set(ids)], result={attachments:[],truncated:false}; let used=0;
+    const unique=[...new Set(ids)], result={attachments:[],media:[],truncated:false}; let used=0;
     for(const id of unique) {
       const row=(await pool.query('SELECT * FROM attachments WHERE id=$1 AND project_id=$2',[id,projectId])).rows[0]; if(!row) throw invalid('Attachment not found in this project.',404);
-      const item={id:row.id,name:row.name,bytes:Number(row.bytes),inventory:[],snippets:[],validation:'ZIP structure checked; original archive is stored without execution.'};
+      const item={id:row.id,name:row.name,bytes:Number(row.bytes),media_type:row.media_type,inventory:[],snippets:[],validation:row.media_type==='application/zip'?'ZIP structure checked; original archive is stored without execution.':'Original attachment stored inertly; media type inferred from file content.'};
       const file=await open(diskPath(row),'r').catch(()=>{throw invalid('Attachment file is unavailable.',404);});
       try {
+        if(row.media_type!=='application/zip') {
+          if(!excluded(row.name)) {
+            item.inventory.push({path:row.name,bytes:Number(row.bytes)});
+            if(MEDIA_TYPES.has(row.media_type)) {
+              if(Number(row.bytes)<=MEDIA_LIMIT) result.media.push({attachment_id:row.id,name:row.name,media_type:row.media_type,bytes:Number(row.bytes)});
+              else item.note='Media omitted from model input because it exceeds 20 MiB.';
+            } else if(row.media_type==='text/plain' && Number(row.bytes)<=100000) {
+              const content=decoder.decode(await readAt(file,0,Number(row.bytes)));
+              if(!content.includes('\0')&&!hasSecret(content)) { const snippet={path:row.name,content}; item.snippets.push(snippet); used+=Buffer.byteLength(JSON.stringify(snippet)); }
+            } else item.note='Original stored; content omitted because this file type or size has no available reader.';
+          }
+        }
         for(const entry of row.inventory) {
           if(entry.directory||excluded(entry.path)) continue;
           const metadata={path:entry.path,bytes:entry.bytes}; const cost=Buffer.byteLength(JSON.stringify(metadata));
@@ -147,5 +183,17 @@ export function createAttachmentService({pool,storageRoot=process.env.ATTACHMENT
     }
     return result;
   };
-  return {handle,list,readContext};
+  const readMedia=async(projectId,id)=>{
+    if(!UUID.test(projectId)||!UUID.test(id)) throw invalid('Invalid attachment identifier.');
+    const row=(await pool.query('SELECT * FROM attachments WHERE id=$1 AND project_id=$2',[id,projectId])).rows[0];
+    if(!row) throw invalid('Attachment not found in this project.',404);
+    if(!MEDIA_TYPES.has(row.media_type)||excluded(row.name)) throw invalid('Attachment is not supported model media.');
+    if(Number(row.bytes)>MEDIA_LIMIT) throw invalid('Model media is limited to 20 MiB per attachment.',413);
+    const file=await open(diskPath(row),'r').catch(()=>{throw invalid('Attachment file is unavailable.',404);});
+    try {
+      if((await file.stat()).size!==Number(row.bytes)) throw invalid('Attachment storage size changed.',409);
+      return {name:row.name,media_type:row.media_type,data:(await readAt(file,0,Number(row.bytes))).toString('base64')};
+    } finally { await file.close(); }
+  };
+  return {handle,list,readContext,readMedia};
 }

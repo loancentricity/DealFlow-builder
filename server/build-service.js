@@ -12,7 +12,7 @@ const text = (value, max, label) => {
 const versions = files => Object.fromEntries(files.map(f => [f.path, f.version]));
 const sameVersions = (a,b) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(k => a[k] === b[k]);
 
-export function createBuildService({ pool, workerToken, publishSnapshot, removeSnapshot, previewUrl, captureCheckpoint = async () => {}, readAttachmentContext = async () => [] }) {
+export function createBuildService({ pool, workerToken, publishSnapshot, removeSnapshot, previewUrl, captureCheckpoint = async () => {}, readAttachmentContext = async () => [], readAttachmentMedia = async () => { throw invalid('Attachment media is unavailable.',404); } }) {
   const configured = typeof workerToken === "string" && workerToken.length >= 24;
   const tx = async fn => {
     const c = await pool.connect();
@@ -90,6 +90,18 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
         });
         json(res,200,{build}); return true;
       }
+      const mediaMatch = path.match(/^\/internal\/build-worker\/([^/]+)\/media\/([^/]+)$/);
+      if (mediaMatch) {
+        const [,buildId,attachmentId] = mediaMatch;
+        if (!uuid.test(buildId) || !uuid.test(attachmentId) || !body.lease_token) throw invalid('Invalid media request.');
+        const reference = await tx(async c => {
+          const b = await lockBuild(c,buildId,body.lease_token);
+          if (!b.attachment_ids?.includes(attachmentId) || !b.attachment_context?.media?.some(item => item.attachment_id === attachmentId))
+            throw invalid('Attachment is not selected for this build.',404);
+          return {projectId:b.project_id};
+        });
+        json(res,200,{media:await readAttachmentMedia(reference.projectId,attachmentId)}); return true;
+      }
       const m=path.match(/^\/internal\/build-worker\/([^/]+)\/(event|complete|fail)$/);
       if(!m || !uuid.test(m[1])) throw invalid("Worker endpoint not found.",404);
       if(typeof body.lease_token !== "string" || !body.lease_token) throw invalid("Build lease is required.",409);
@@ -152,6 +164,10 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
       if (!Array.isArray(attachmentIds) || attachmentIds.length > 20 || attachmentIds.some(id => typeof id !== 'string' || !uuid.test(id)) || new Set(attachmentIds).size !== attachmentIds.length)
         throw invalid('Select valid project attachments.');
       const attachmentContext = await readAttachmentContext(projectId, attachmentIds);
+      if (attachmentContext.media?.length && !['openai','anthropic','google'].includes(providerId))
+        throw invalid('Choose OpenAI, Anthropic, or Google to read image and PDF attachments.');
+      if ((attachmentContext.media || []).reduce((sum,item) => sum + Number(item.bytes || 0),0) > 20*1024*1024)
+        throw invalid('Selected image/PDF files exceed the combined 20 MiB AI input limit. Select fewer or smaller files.',413);
       const build=await tx(async c => {
         await lockProject(c,projectId);
         if((await c.query("SELECT id FROM builds WHERE project_id=$1 AND status IN ('queued','running','review')",[projectId])).rowCount) throw invalid("Finish or cancel the existing active build first.",409);

@@ -96,7 +96,7 @@ function updateControls() {
   const active = activeBuild();
   const building = active && ["queued", "running"].includes(active.status);
   const selectedProvider = (state.project?.agent?.providers || []).find(provider => provider.id === $("build-provider").value);
-  const uploading = [...state.uploads.values()].some(upload => upload.projectId === state.project?.project.id && upload.status === 'uploading');
+  const uploading = [...state.uploads.values()].some(upload => upload.projectId === state.project?.project.id && ['queued', 'uploading'].includes(upload.status));
   $("request-build").disabled = state.busy || Boolean(building) || uploading || selectedProvider?.available === false;
   $("request-build").textContent = building ? "Working on your message…" : uploading ? "Uploading attachments…" : "Send ↗";
   for (const id of ["apply-build", "cancel-build"]) if ($(id)) $(id).disabled = state.busy;
@@ -807,8 +807,8 @@ function renderBuilds() {
 async function requestBuild() {
   if (state.busy || ["queued", "running"].includes(activeBuild()?.status)) return;
   const prompt = $("build-prompt").value.trim();
-  if (!prompt) { notice('Add a message telling the builder what you would like it to do with your project or attached ZIPs.'); $("build-prompt").focus(); return; }
-  if ([...state.uploads.values()].some(upload => upload.projectId === state.project.project.id && upload.status === 'uploading')) { notice('Wait for your ZIP uploads to finish before sending the message.'); return; }
+  if (!prompt) { notice('Add a message telling the builder what you would like it to do with your project or attached files.'); $("build-prompt").focus(); return; }
+  if ([...state.uploads.values()].some(upload => upload.projectId === state.project.project.id && ['queued', 'uploading'].includes(upload.status))) { notice('Wait for your file uploads to finish before sending the message.'); return; }
   await operation(async () => {
     notice("Sending your idea to the builder…");
     try {
@@ -1015,7 +1015,24 @@ function renderSavePreview() {
 
 const MAX_ATTACHMENT_BYTES = 250 * 1024 * 1024;
 function attachmentSize(bytes) { return `${(Number(bytes) / (1024 * 1024)).toFixed(Number(bytes) < 1024 * 1024 ? 2 : 1)} MiB`; }
+function attachmentType(attachment) {
+  const mediaType = attachment.media_type;
+  if (mediaType && mediaType !== 'application/octet-stream') return mediaType;
+  const extension = attachment.name?.match(/\.([^.]+)$/)?.[1];
+  return extension ? `${extension.toUpperCase()} file` : 'File';
+}
 function attachmentError(message) { $('attachment-errors').append(element('p', 'form-error', message)); }
+function attachmentReaderNote(attachment) {
+  const type = (attachment.media_type || '').toLowerCase();
+  const name = attachment.name.toLowerCase();
+  if (type === 'image/gif' || name.endsWith('.gif')) return 'Stored for download; convert GIF to PNG/JPG for AI reading.';
+  if (['application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(type) || /\.(pdf|png|jpe?g|webp)$/.test(name)) {
+    if (Number(attachment.bytes) > 20 * 1024 * 1024) return 'Stored. Use a smaller file for AI reading (20 MiB limit).';
+    return 'AI reading: OpenAI, Anthropic, or Google. 20 MiB combined selected media limit.';
+  }
+  if (type === 'application/octet-stream') return 'Stored for download; this file type has no AI reader yet.';
+  return '';
+}
 function renderAttachments() {
   if (!state.project) return;
   const projectId = state.project.project.id;
@@ -1029,11 +1046,12 @@ function renderAttachments() {
     for (const attachment of attachments) {
       const card = element('article', 'attachment-card');
       const header = element('div', 'attachment-card-heading'); header.append(element('strong', '', attachment.name), element('span', '', attachmentSize(attachment.bytes)));
-      const status = element('span', 'attachment-status', 'Stored with project');
+      const status = element('span', 'attachment-status', `${attachmentType(attachment)} · Stored with project`);
       const label = element('label', 'attachment-selection');
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selected.has(attachment.id); checkbox.setAttribute('aria-label', `Use ${attachment.name} with message`);
       checkbox.addEventListener('change', () => { if (checkbox.checked) selected.add(attachment.id); else selected.delete(attachment.id); state.attachmentKey = JSON.stringify([projectId, state.project?.project.id === projectId ? state.project.attachments || [] : attachments, [...selected]]); });
       label.append(checkbox, element('span', '', 'Use with message')); card.append(header, status, label);
+      const readerNote = attachmentReaderNote(attachment); if (readerNote) card.append(element('p', 'attachment-reader-note', readerNote));
       if (attachment.download_url) { const link = element('a', 'attachment-download', 'Download'); link.href = attachment.download_url; link.download = attachment.name; card.append(link); }
       list.append(card);
     }
@@ -1046,7 +1064,11 @@ function renderUploads() {
   for (const upload of state.uploads.values()) {
     if (upload.projectId !== state.project?.project.id || upload.status === 'stored') continue;
     const card = element('article', 'upload-card'); card.dataset.uploadId = upload.id; card.append(element('strong', '', upload.name));
-    if (upload.status === 'uploading') {
+    if (upload.status === 'queued') {
+      const cancel = element('button', 'text-button', 'Cancel upload'); cancel.type = 'button';
+      cancel.addEventListener('click', () => { upload.file = null; upload.status = 'cancelled'; upload.message = 'Cancelled before upload.'; pumpUploads(); });
+      card.append(element('span', '', 'Waiting to upload'), cancel);
+    } else if (upload.status === 'uploading') {
       const progress = document.createElement('progress'); progress.max = upload.bytes; progress.value = upload.loaded; progress.setAttribute('aria-label', `Uploading ${upload.name}`);
       const detail = upload.loaded >= upload.bytes ? 'Transfer complete · storing with project…' : `${attachmentSize(upload.loaded)} of ${attachmentSize(upload.bytes)} uploaded`;
       const cancel = element('button', 'text-button', 'Cancel upload'); cancel.type = 'button'; cancel.addEventListener('click', () => upload.xhr.abort());
@@ -1068,15 +1090,28 @@ async function refreshAttachmentMetadata(projectId) {
 }
 function uploadAttachment(file) {
   if (!state.project) return;
-  if (!/\.zip$/i.test(file.name)) { attachmentError(`${file.name}: choose a ZIP file. Zip folders before attaching them.`); return; }
-  if (file.size > MAX_ATTACHMENT_BYTES) { attachmentError(`${file.name}: ZIP files must be 250 MiB or smaller.`); return; }
-  if (!file.size) { attachmentError(`${file.name}: this file is empty. Choose a ZIP that contains your project.`); return; }
-  const projectId = state.project.project.id; const xhr = new XMLHttpRequest();
-  const upload = { id: crypto.randomUUID(), projectId, name: file.name, bytes: file.size, loaded: 0, status: 'uploading', xhr };
-  state.uploads.set(upload.id, upload); renderUploads(); updateControls();
-  const finishError = (message, status = 'error') => { upload.status = status; upload.message = message; renderUploads(); updateControls(); refreshAttachmentMetadata(projectId); };
+  if (file.size > MAX_ATTACHMENT_BYTES) { attachmentError(`${file.name}: files must be 250 MiB or smaller.`); return; }
+  if (!file.size) { attachmentError(`${file.name}: this file is empty. Choose a file with content.`); return; }
+  const upload = { id: crypto.randomUUID(), projectId: state.project.project.id, name: file.name, bytes: file.size, loaded: 0, status: 'queued', file };
+  state.uploads.set(upload.id, upload); pumpUploads();
+}
+function pumpUploads() {
+  for (const upload of state.uploads.values()) {
+    if ([...state.uploads.values()].filter(item => item.status === 'uploading').length >= 2) break;
+    if (upload.status !== 'queued') continue;
+    startAttachmentUpload(upload);
+  }
+  renderUploads(); updateControls();
+}
+function startAttachmentUpload(upload) {
+  const projectId = upload.projectId; const xhr = new XMLHttpRequest();
+  let transferFile = upload.file; upload.file = null; upload.xhr = xhr; upload.status = 'uploading';
+  const finishError = (message, status = 'error') => {
+    if (upload.status !== 'uploading') return;
+    upload.status = status; upload.message = message; upload.xhr = null; pumpUploads(); refreshAttachmentMetadata(projectId);
+  };
   xhr.open('POST', `/api/projects/${encodeURIComponent(projectId)}/attachments`);
-  xhr.setRequestHeader('Content-Type', 'application/zip'); xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+  xhr.setRequestHeader('Content-Type', transferFile.type || 'application/octet-stream'); xhr.setRequestHeader('X-File-Name', encodeURIComponent(upload.name));
   xhr.responseType = 'json'; xhr.timeout = 10 * 60 * 1000;
   xhr.upload.addEventListener('progress', event => {
     upload.loaded = event.loaded;
@@ -1088,15 +1123,17 @@ function uploadAttachment(file) {
   xhr.addEventListener('load', () => {
     const data = xhr.response || {};
     if (xhr.status < 200 || xhr.status >= 300) { finishError(typeof data.error === 'string' ? data.error : `Upload failed (${xhr.status}).`); return; }
-    if (!data.attachment?.id) { finishError('The upload response was incomplete. Refresh the project to check whether the ZIP was stored.'); return; }
-    upload.status = 'stored'; state.uploads.delete(upload.id);
+    if (!data.attachment?.id) { finishError('The upload response was incomplete. Refresh the project to check whether the file was stored.'); return; }
+    upload.status = 'stored'; upload.xhr = null; state.uploads.delete(upload.id);
     const selected = state.attachmentSelections.get(projectId) || new Set(); selected.add(data.attachment.id); state.attachmentSelections.set(projectId, selected);
     if (state.project?.project.id === projectId) { state.syncEpoch++; state.project.attachments = [data.attachment, ...(state.project.attachments || []).filter(item => item.id !== data.attachment.id)]; renderAttachments(); updateControls(); }
+    pumpUploads();
   });
   xhr.addEventListener('error', () => finishError('Upload failed because the connection was interrupted. Check your connection and try again.'));
   xhr.addEventListener('timeout', () => finishError('Upload timed out after 10 minutes. Check the stored attachments before trying again.'));
   xhr.addEventListener('abort', () => finishError('Upload cancelled. If the transfer already finished, its file may still appear below.', 'cancelled'));
-  xhr.send(file);
+  try { xhr.send(transferFile); } catch { finishError('The upload could not start. Please try again.'); }
+  transferFile = null;
 }
 $('attach-zip').addEventListener('click', () => $('attachment-picker').click());
 $('attachment-picker').addEventListener('change', () => { $('attachment-errors').replaceChildren(); for (const file of $('attachment-picker').files) uploadAttachment(file); $('attachment-picker').value = ''; });
