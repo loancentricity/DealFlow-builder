@@ -66,3 +66,11 @@ Workspace/file/checkpoint tools and static ZIP operations are integrated with th
 
 
 The final regression also proves that applying a build cannot reuse a deleted file version and accept a stale draft. Checkpoints provides an optional Save this version action before exporting or capturing the latest candidate; sending another instruction remains sufficient to continue.
+
+## Message ZIP attachments
+
+ZIP files can be dropped onto the message textarea or selected with Attach ZIP, with actual upload progress and cancellation. Original archives stay with the same project; uploading preserves drafts and source files and works without an available AI provider. Limits are 250 MiB per ZIP, 1 GiB and 20 attachments per project, and two concurrent uploads. The dashboard static importer remains separate.
+
+Migration 006 stores attachment metadata; originals stream into an ignored local directory or the dedicated Compose attachment volume. Structure, path, link, encryption, entry-count and advertised-expansion checks run before storage. No archive code executes. Selected text excerpts are bounded to a 200 KB context budget and filtered for common credential/dependency paths; selected entries receive size/CRC checks. Raw archives are not sent to models. Migration 007 freezes selected attachment context with each build; both generation and source review receive it.
+
+Verification: 36 local tests passed with no skips, including a 6 MiB original that downloads byte-for-byte and survives an app restart, project scoping, invalid/oversized ZIP rejection, and filtered worker context. GitHub Actions run 34792696004 on b7bcac90c0762ca8bc6ea12a538d7703e4b89ffe passed standard and container browser journeys, including both the file picker and dropping a ZIP directly on the textarea while preserving the draft. Desktop/mobile in-app inspection confirmed the controls; an owner upload was visibly stored and a subsequent build started. Full 250 MiB transfer throughput was not benchmarked.
