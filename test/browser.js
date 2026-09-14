@@ -17,7 +17,7 @@ try {
   await page.goto(base);
   await page.locator("#new-project").click();
   const projectName = `Browser journey ${Date.now()}`;
-  await page.getByLabel("Project name", { exact: true }).fill(projectName);
+  await page.locator("#project-name").fill(projectName);
   await page.locator("#create-submit").click();
   await page.locator("#workspace").waitFor({ state: "visible" });
   await page.locator("#toggle-code").click();
@@ -119,6 +119,7 @@ try {
       response.request().method() === "POST" &&
       response.url().endsWith("/tests"),
   );
+  await page.locator('[data-tool="activity"]').click();
   await page.locator("details.project-details > summary").click();
   await page.locator("#run-tests").click();
   assert.equal((await checkResponse).status(), 200);
@@ -132,6 +133,7 @@ try {
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('[data-mobile-view="preview"]').click();
   await page.screenshot({
     path: "test-results/workspace-mobile.png",
     fullPage: true,
@@ -149,7 +151,7 @@ try {
   if (process.env.BUILD_WORKER_TOKEN) {
     await candidateDecisionJourney(project.id);
   } else {
-    console.log("SKIP: candidate Keep/Discard browser journey requires BUILD_WORKER_TOKEN and an isolated test environment without a live build worker.");
+    console.log("SKIP: continuous-feedback browser journey requires BUILD_WORKER_TOKEN and an isolated test environment without a live build worker.");
   }
   await page.locator("#back-projects").click();
   await page.locator("#dashboard").waitFor({ state: "visible" });
@@ -190,6 +192,9 @@ async function candidateDecisionJourney(projectId) {
     const html = source.files.find(file => file.path === "index.html");
     const candidate = html.content.replace(/<h1>[^<]*<\/h1>/, `<h1>${heading}</h1>`);
     assert.notEqual(candidate,html.content);
+    await page.reload();
+    await page.locator("#workspace").waitFor({state:"visible"});
+    await page.locator('[data-mobile-view="chat"]').click();
     await page.locator("#build-prompt").fill(`TEST FIXTURE ONLY: change the heading to ${heading}.`);
     const queuedResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/projects/${projectId}/builds`));
     await page.locator("#request-build").click();
@@ -211,8 +216,9 @@ async function candidateDecisionJourney(projectId) {
       review:{approved:true,summary:"Explicit test fixture source-review decision."},
     });
     assert.equal(reviewed.status,"review");
-    await page.locator("#apply-build").waitFor({state:"visible",timeout:20000});
+    await page.locator("#cancel-build").waitFor({state:"visible",timeout:20000});
     await page.locator("#build-progress").waitFor({state:"hidden"});
+    await page.locator('[data-mobile-view="preview"]').click();
     await page.frameLocator("#preview-frame").getByRole("heading",{name:heading,exact:true}).waitFor();
     assert.deepEqual((await detail()).files,baseline,"reviewing a candidate preserves saved source");
     return reviewed;
@@ -221,22 +227,45 @@ async function candidateDecisionJourney(projectId) {
     if (await page.locator("#toggle-code").getAttribute("aria-expanded") === "true") await page.locator("#toggle-code").click();
     await publishCandidate("Before follow-up fixture");
     await publishCandidate("Kept browser fixture", "Before follow-up fixture");
-    await page.locator("#apply-build").click();
-    await page.waitForFunction(() => document.querySelector("#notice").textContent === "Version kept. Tell us what you would like to improve next.");
-    assert.match((await detail()).files.find(file=>file.path==="index.html").content,/Kept browser fixture/);
+    const pending = await publishCandidate("Discarded browser fixture", "Kept browser fixture");
+    const saved = (await detail()).files;
+    assert.match(saved.find(file=>file.path==="index.html").content,/Kept browser fixture/);
     await page.reload();
     await page.locator("#workspace").waitFor({state:"visible"});
-    await page.frameLocator("#preview-frame").getByRole("heading",{name:"Kept browser fixture",exact:true}).waitFor();
-    const saved = (await detail()).files;
-    const discarded = await publishCandidate("Discarded browser fixture");
+    await page.locator('[data-mobile-view="preview"]').click();
+    await page.frameLocator("#preview-frame").getByRole("heading",{name:"Discarded browser fixture",exact:true}).waitFor();
+    await page.locator('[data-mobile-view="chat"]').click();
     await page.locator("#cancel-build").click();
     await page.waitForFunction(() => document.querySelector("#notice").textContent === "Version discarded. Your saved website is unchanged.");
     assert.deepEqual((await detail()).files,saved,"discard preserves source contents and versions");
-    assert.equal((await page.request.get(discarded.preview_url)).status(),404);
+    assert.equal((await page.request.get(pending.preview_url)).status(),404);
+    await page.locator('[data-mobile-view="preview"]').click();
     await page.frameLocator("#preview-frame").getByRole("heading",{name:"Kept browser fixture",exact:true}).waitFor();
     await page.screenshot({path:"test-results/owner-decisions-mobile.png",fullPage:true});
-    console.log("PASS: test-only candidate preview → Keep → reload persistence → second candidate → Discard → saved source unchanged.");
+
+    // Active candidates prevent concurrent source writes. SQL-level stale-base
+    // conflict coverage lives in builds.test.js; this tests the public guard.
+    const protectedCandidate = await publishCandidate("Protected candidate fixture");
+    const latest=(await detail()).files.find(file=>file.path==="index.html");
+    const concurrent=await page.request.put(`${base}/api/projects/${projectId}/files`,{data:{...latest,content:latest.content+"\n<!-- newer saved source -->"}});
+    assert.equal(concurrent.status(),409,"active candidate blocks concurrent source edits");
+    assert.deepEqual((await detail()).files.find(file=>file.path==="index.html"),latest,"rejected save preserves source and version");
+    await page.locator('[data-mobile-view="chat"]').click();
+    const followup="Preserve this unsent follow-up while I discard this candidate.";
+    await page.locator("#build-prompt").fill(followup);
+    await page.locator("#cancel-build").click();
+    await page.waitForFunction(()=>document.querySelector("#notice").textContent.includes("discarded"));
+    assert.equal(await page.locator("#build-prompt").inputValue(),followup);
+    assert.deepEqual((await detail()).files.find(file=>file.path==="index.html"),latest);
+    assert.equal((await page.request.get(protectedCandidate.preview_url)).status(),404);
+    await page.locator('[data-mobile-view="tools"]').click();
+    await page.screenshot({path:"test-results/workspace-tools-mobile.png",fullPage:true});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),"mobile tools have no horizontal overflow");
+    console.log("PASS: reviewed preview → follow-up autoapply → candidate reload → discard → active candidate blocks source edits; unsent prompt preserved; mobile conversation/preview/tools verified.");
   } finally {
     await internal("heartbeat",{name:"Browser test fixture (not AI)",ready:false,reason:"Browser fixture completed; no live AI provider was used."});
   }
 }
+
+
+

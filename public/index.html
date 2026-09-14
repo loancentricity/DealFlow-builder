@@ -69,7 +69,7 @@
                 From a first idea to a working preview. All in one workspace.
               </p>
             </div>
-            <button class="primary" id="new-project">+ New project</button>
+            <div class="dashboard-actions"><button class="secondary" id="import-project">Import ZIP</button><input id="import-zip" class="sr-only" type="file" accept=".zip,application/zip" aria-label="Import project ZIP"><button class="primary" id="new-project">+ New project</button></div>
           </div>
           <section class="starter-banner">
             <div class="starter-graphic" aria-hidden="true">&lt;/&gt;</div>
@@ -96,7 +96,7 @@
             <span aria-hidden="true">◇</span>
             <p>
               <strong>Your project stays yours.</strong> Build static websites in this first version.
-              Connected apps, databases, and imported projects are still ahead.
+              Import your source independently or start fresh. Server runtimes and hosted publishing are still ahead.
             </p>
           </div>
         </section>
@@ -109,16 +109,17 @@
                 Your website <span id="version-label">Starter · ready for your idea</span>
               </p>
             </div>
-            <button class="secondary" id="back-projects">← All projects</button>
+            <div class="workspace-actions"><button class="secondary compact" id="back-projects">← Projects</button><button class="primary compact" id="publish-project">Publish</button></div>
           </div>
+          <nav class="mobile-workspace-nav" aria-label="Workspace view"><button data-mobile-view="chat">Conversation</button><button data-mobile-view="preview" aria-pressed="true">Preview</button><button data-mobile-view="tools">Tools</button></nav>
           <div class="owner-layout">
             <section class="brief-panel">
-              <div class="brief-heading"><span class="eyebrow">KEEP THE CONVERSATION GOING</span><h2>What’s next?</h2><p>Send feedback or new instructions here. Each message continues from the version in your preview.</p></div>
-              <form id="build-form"><label for="build-prompt">Your message</label><textarea id="build-prompt" maxlength="60000" aria-describedby="build-prompt-help" placeholder="Add a new page, change the layout, fix this step, or tell me what you want to improve…" required></textarea><button class="primary full" id="request-build">Send <span aria-hidden="true">↗</span></button></form>
-              <p class="build-scope" id="build-prompt-help">Sending feedback saves the reviewed preview as your starting point. Up to 60,000 characters. Static websites for now.</p>
+              <div class="brief-heading"><span class="conversation-symbol" aria-hidden="true">✧</span><h2>Build with DealFlow</h2><span class="conversation-label">Conversation</span></div>
+              <form id="build-form"><label for="build-prompt">Your message</label><textarea id="build-prompt" maxlength="60000" aria-describedby="build-prompt-help" placeholder="Add a new page, change the layout, fix this step, or tell me what you want to improve…" required></textarea><div class="composer-options"><label for="build-provider">AI provider</label><select id="build-provider" aria-describedby="provider-reason"><option value="openai">OpenAI · checking…</option></select></div><p id="provider-reason" class="provider-reason"></p><button class="primary full" id="request-build">Send <span aria-hidden="true">↗</span></button></form>
+              <p class="build-scope" id="build-prompt-help">Continue from the preview. Up to 60,000 characters.</p>
               <div class="builder-availability"><span class="status-dot" id="builder-dot"></span><div><strong id="builder-status">Checking builder…</strong><p id="builder-reason"></p></div></div>
               <section id="build-current" class="build-current" aria-live="polite" hidden></section>
-              <div class="history-heading"><h3>Your requests</h3><span>Saved with this project</span></div><div id="build-history"><p class="muted">Your first idea starts here.</p></div>
+              <div class="history-heading"><h3>Conversation</h3><span>Saved with this project</span></div><div id="build-history" role="log" aria-label="Project conversation"><p class="muted">Your first idea starts here.</p></div>
             </section>
           <div class="workbench">
             <section class="files-panel" hidden>
@@ -201,6 +202,18 @@
               </div>
             </section>
           </div>
+          <aside class="tool-drawer" aria-label="Project tools">
+            <div class="tool-drawer-heading"><strong>Workspace tools</strong><span id="storage-summary"></span></div>
+            <nav class="tool-tabs" role="tablist" aria-label="Project tools">
+              <button role="tab" id="tab-library" aria-controls="tool-library" aria-selected="true" data-tool="library">Library</button><button role="tab" id="tab-files" aria-controls="tool-files" aria-selected="false" data-tool="files">Files</button><button role="tab" id="tab-activity" aria-controls="tool-activity" aria-selected="false" data-tool="activity">Activity</button><button role="tab" id="tab-checkpoints" aria-controls="tool-checkpoints" aria-selected="false" data-tool="checkpoints">Checkpoints</button><button role="tab" id="tab-connections" aria-controls="tool-connections" aria-selected="false" data-tool="connections">Connections</button><button role="tab" id="tab-publish" aria-controls="tool-publish" aria-selected="false" data-tool="publish">Publish</button>
+            </nav>
+            <section id="tool-library" class="tool-content" role="tabpanel" aria-labelledby="tab-library"><label for="library-search">Find a project</label><input id="library-search" type="search" placeholder="Search your library"><div id="tool-project-list"></div><div class="tool-divider"></div><h3>This project</h3><form id="rename-form"><label for="rename-name">Project name</label><input id="rename-name" maxlength="80" required><button class="secondary compact">Rename project</button></form><form id="duplicate-form"><label for="duplicate-name">Copy name</label><input id="duplicate-name" maxlength="80" placeholder="A new name for your copy" required><button class="secondary compact">Duplicate project</button></form></section>
+            <section id="tool-files" class="tool-content files-tool" role="tabpanel" aria-labelledby="tab-files" hidden><div class="tool-section-heading"><h3>Project files</h3><button class="text-button" id="delete-file">Delete selected</button></div><form id="add-file-form"><label class="sr-only" for="new-file-path">New file path</label><input id="new-file-path" placeholder="New file, e.g. about.html" required maxlength="240"><button class="secondary compact">Add file</button></form><div id="source-tool-host"></div></section>
+            <section id="tool-activity" class="tool-content" role="tabpanel" aria-labelledby="tab-activity" hidden><div id="activity-tool-host"></div></section>
+            <section id="tool-checkpoints" class="tool-content" role="tabpanel" aria-labelledby="tab-checkpoints" hidden><h3>A place to come back to</h3><p class="muted">Save a checkpoint before a big change. Restore its saved files whenever you need to.</p><form id="checkpoint-form"><label for="checkpoint-label">Checkpoint name</label><input id="checkpoint-label" required maxlength="100" placeholder="Before the homepage redesign"><button class="primary compact">Save checkpoint</button></form><div id="checkpoint-list"></div></section>
+            <section id="tool-connections" class="tool-content" role="tabpanel" aria-labelledby="tab-connections" hidden><div class="tool-section-heading"><h3>Connections</h3><button class="text-button" id="refresh-connections">Refresh</button></div><p class="muted">Actual services available to this workspace. Credentials stay outside the browser.</p><div id="connections-list"><p class="muted">Open this tool to check available services.</p></div><div id="agent-tool-host"></div></section>
+            <section id="tool-publish" class="tool-content" role="tabpanel" aria-labelledby="tab-publish" hidden><span class="publish-symbol" aria-hidden="true">↗</span><h3>Your next step: out into the world.</h3><p class="muted">No publishing provider is connected. Your preview runs locally; it is not a public deployment.</p><p class="muted">Download your saved project as a ZIP to keep a portable copy or deploy with a provider you choose.</p><a class="primary download-project" id="download-project" download>Download project</a><p class="tool-footnote">Includes saved source. Save code edits first.</p></section>
+          </aside>
           </div>
           <details class="project-details"><summary>Project details &amp; checks</summary><div class="project-bottom">
             <section class="activity-panel">

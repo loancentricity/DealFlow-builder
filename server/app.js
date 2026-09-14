@@ -9,6 +9,8 @@ import {
   runStaticChecks,
 } from "./domain.js";
 import { createBuildService } from "./build-service.js";
+import { createCheckpointService } from "./checkpoint-service.js";
+import { createProjectService, requireIdle, validateSourceSet } from "./project-service.js";
 import { json, readJson } from "./http.js";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function createApp({
@@ -76,12 +78,20 @@ export function createApp({
     running: true,
     url: `${previewPublicUrl.replace(/\/$/, "")}/p/${id}/index.html`,
   });
-  const builds = createBuildService({
-    pool, workerToken: buildWorkerToken,
+  const checkpoints = createCheckpointService({
+    pool,
     publishSnapshot: (id, files) => worker("/internal/snapshots", "POST", { id, files }),
     removeSnapshot: id => worker(`/internal/snapshots/${id}`, "DELETE"),
     previewUrl: id => publicPreview(id).url,
   });
+  const builds = createBuildService({
+    pool, workerToken: buildWorkerToken,
+    captureCheckpoint: checkpoints.capture,
+    publishSnapshot: (id, files) => worker("/internal/snapshots", "POST", { id, files }),
+    removeSnapshot: id => worker(`/internal/snapshots/${id}`, "DELETE"),
+    previewUrl: id => publicPreview(id).url,
+  });
+  const projects = createProjectService({ pool, tx, lock, event, checkpoints });
   const server = http.createServer(async (req, res) => {
     try {
       // A local single-owner app: reject hostile Host/Origin values and DNS rebinding.
@@ -95,6 +105,21 @@ export function createApp({
         throw invalid("Cross-site requests are not allowed.", 403);
       const path = new URL(req.url, `http://${authority}`).pathname;
       if (await builds.handle(req, res, path)) return;
+      if (await checkpoints.handle(req, res, path)) return;
+      if (await projects.handle(req, res, path)) return;
+      if (path === '/api/connections' && req.method === 'GET') {
+        const agent = await builds.status();
+        let database = false, preview = false;
+        try { await pool.query('SELECT 1'); database = true; } catch { /* status only */ }
+        try { await worker(`/internal/snapshots/${'0'.repeat(64)}`); preview = true; } catch { /* status only */ }
+        return json(res, 200, { connections: [
+          ...(agent.providers || []).map(provider => ({ id: provider.id, name: provider.name, status: provider.available ? 'Available' : 'Unavailable', detail: provider.available ? `Worker ready · ${provider.model}` : provider.reason })),
+          { id: 'postgresql', name: 'Project storage', status: database ? 'Connected' : 'Unavailable', detail: 'PostgreSQL stores saved source, conversation, and checkpoints.' },
+          { id: 'preview', name: 'Product previews', status: preview ? 'Connected' : 'Unavailable', detail: 'Separate static preview worker.' },
+          { id: 'cloudflare', name: 'Cloudflare domains', status: 'Not connected here', detail: 'Existing domain configuration remains with Cloudflare. Domain management is not connected to this workspace.' },
+          { id: 'outlook', name: 'Outlook email', status: 'Not connected here', detail: 'Application email requires its own authorized Outlook connection. Sending email is not yet available in this static runtime.' },
+        ] });
+      }
       if (path === "/api/health" && req.method === "GET") {
         try {
           await pool.query("SELECT 1");
@@ -131,6 +156,7 @@ export function createApp({
             template: "static-web",
             message: "Created from the static web starter.",
           });
+          await checkpoints.capture(c, id, 'Initial saved source');
           return project;
         });
         return json(res, 201, { project });
@@ -197,12 +223,18 @@ export function createApp({
           });
           data.agent = await builds.status();
           data.builds = await builds.list(id);
+          data.checkpoints = await checkpoints.list(id);
+          data.storage = { file_count: data.files.length, bytes: data.files.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0) };
           return json(res, 200, data);
         }
         if (action === "files" && req.method === "PUT") {
           const f = validateFile(await readJson(req));
           const file = await tx(async (c) => {
             await lock(c, id);
+            await requireIdle(c, id);
+            const sources = (await c.query('SELECT path,content FROM files WHERE project_id=$1', [id])).rows;
+            validateSourceSet(sources.map(source => source.path === f.path ? f : source));
+            await checkpoints.capture(c, id, 'Before saving a file');
             const updated = await c.query(
               "UPDATE files SET content=$3, version=version+1 WHERE project_id=$1 AND path=$2 AND version=$4 RETURNING path,content,version",
               [id, f.path, f.content, f.version],

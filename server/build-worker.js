@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { runStaticChecks, validateFile } from "./domain.js";
+import { createProviderRegistry } from "./model-providers.js";
 
 const buildSchema = {
   type: "object", additionalProperties: false, required: ["summary", "files"],
@@ -17,14 +18,17 @@ const constraints = `The runtime is a static HTML/CSS/JavaScript browser preview
 
 export function createOpenAIProvider({ apiKey, baseUrl = "https://api.openai.com/v1", model = "gpt-6-astra", fetchImpl = fetch }) {
   const base = baseUrl.replace(/\/$/, "");
-  if (new URL(base).protocol !== "https:") throw new Error("The model API requires HTTPS.");
+  const endpoint = new URL(base);
+  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error("The model API requires a plain HTTPS endpoint.");
   async function request(path, body) {
-    const response = await fetchImpl(`${base}${path}`, {
+    let response;
+    try { response = await fetchImpl(`${base}${path}`, {
       method: body ? "POST" : "GET",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(300000),
-    });
+      redirect: "error",
+    }); } catch(error) { throw new Error(error.name === "TimeoutError" ? "Model service timed out." : "Model service connection failed."); }
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       if (["credit_balance_exhausted", "insufficient_quota"].includes(error.error?.code))
@@ -58,7 +62,7 @@ export function createOpenAIProvider({ apiKey, baseUrl = "https://api.openai.com
   };
 }
 
-export async function runBuildWorker({ appUrl, token, provider, signal }) {
+export async function runBuildWorker({ appUrl, token, provider, providers, signal }) {
   if (!token || token.length < 24) throw new Error("BUILD_WORKER_TOKEN must contain at least 24 characters.");
   const app = new URL(appUrl);
   if (!["127.0.0.1", "localhost", "[::1]"].includes(app.hostname)) throw new Error("The build worker requires a loopback control plane URL.");
@@ -70,24 +74,37 @@ export async function runBuildWorker({ appUrl, token, provider, signal }) {
     if (!response.ok) throw new Error(`Control plane rejected worker operation (HTTP ${response.status}).`);
     return response.json();
   }
-  let ready = false, reason = "Connecting to the model service.", blockedUntil = 0;
-  const heartbeat = () => send("heartbeat", { name: "AI builder and source reviewer", ready, reason }).catch(() => {});
+  const registry = providers || [{id:"openai",name:"OpenAI",model:"injected",adapter:provider,available:false,reason:"Connecting to the model service.",checkedAt:0,blockedUntil:0}];
+  let ready = false, reason = "Connecting to the model service.";
+  const publicProviders = () => registry.map(({id,name,model,available,reason}) => ({id,name,model,available,reason}));
+  const refresh = async () => {
+    await Promise.all(registry.map(async entry => {
+      if (!entry.adapter || Date.now() < entry.blockedUntil || Date.now()-entry.checkedAt < 60000) return;
+      entry.checkedAt=Date.now();
+      try { await entry.adapter.probe(); entry.available=true; entry.reason=null; }
+      catch(error) { entry.available=false; entry.reason=error.message; }
+    }));
+    ready=registry.some(entry=>entry.available);
+    reason=ready?null:"No configured model provider is available.";
+  };
+  const heartbeat = () => send("heartbeat", { name: "AI builder and source reviewer", ready, reason, providers:publicProviders() }).catch(() => {});
   const timer = setInterval(heartbeat, 8000);
   try {
     while (!signal?.aborted) {
       try {
-        if (Date.now() < blockedUntil) { await heartbeat(); await sleep(1500, undefined, { signal }); continue; }
-        if (!ready) { await provider.probe(); ready = true; reason = null; }
+        await refresh();
         await heartbeat();
         const { build } = await send("claim");
         if (!build) { await sleep(1500, undefined, { signal }); continue; }
+        const selected = registry.find(entry=>entry.id===(build.provider || "openai"));
         const report = (type, message) => send(`${build.id}/event`, { lease_token: build.lease_token, type, message });
         try {
+          if (!selected?.available || !selected.adapter) throw new Error("Selected model provider is unavailable.");
           await report("GENERATION_STARTED", "AI builder is creating the requested changes.");
           let candidate, review, feedback;
           for (let attempt = 0; attempt < 2; attempt++) {
             const baseline = candidate?.files || build.source_files;
-            candidate = await provider.build({ request: build.prompt, previous_requests: build.history || [], source_files: baseline, feedback });
+            candidate = await selected.adapter.build({ request: build.prompt, previous_requests: build.history || [], source_files: baseline, feedback });
             if (!Array.isArray(candidate.files) || !candidate.files.length || candidate.files.length > 30) throw new Error("Model returned an invalid file list.");
             candidate.files.forEach(file => validateFile({ ...file, version: 1 }));
             const merged = new Map(baseline.map(file => [file.path, file]));
@@ -96,7 +113,7 @@ export async function runBuildWorker({ appUrl, token, provider, signal }) {
             candidate.files = files;
             const checks = runStaticChecks(files);
             await report("REVIEW_STARTED", "A separate AI pass is reviewing the candidate source and requested behavior.");
-            review = await provider.review({ request: build.prompt, previous_requests: build.history || [], files, structural_checks: checks });
+            review = await selected.adapter.review({ request: build.prompt, previous_requests: build.history || [], files, structural_checks: checks });
             if (checks.passed && review.approved) break;
             feedback = { checks, review };
             if (attempt === 0) await report("REPAIR_STARTED", "The review found issues. The builder is making one correction pass.");
@@ -106,8 +123,8 @@ export async function runBuildWorker({ appUrl, token, provider, signal }) {
           const message = error.name === "TimeoutError" ? "The model service timed out. Try a smaller change." : error.message;
           await send(`${build.id}/fail`, { lease_token: build.lease_token, error: message.slice(0, 4000) }).catch(() => {});
           if (/Model service/.test(message)) {
-            ready = false; reason = message;
-            blockedUntil = /no API credits/.test(message) ? Infinity : Date.now() + 60000;
+            if(selected) { selected.available=false; selected.reason=message; selected.blockedUntil=/no API credits/.test(message)?Infinity:Date.now()+60000; }
+            ready=registry.some(entry=>entry.available); reason=ready?null:message;
           }
         }
       } catch (error) {
@@ -117,7 +134,7 @@ export async function runBuildWorker({ appUrl, token, provider, signal }) {
         await sleep(10000, undefined, { signal }).catch(() => {});
       }
     }
-  } finally { clearInterval(timer); ready = false; reason = "Build worker stopped."; await heartbeat(); }
+  } finally { clearInterval(timer); ready = false; reason = "Build worker stopped."; registry.forEach(entry=>{entry.available=false;entry.reason=reason;}); await heartbeat(); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -127,7 +144,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   runBuildWorker({
     appUrl: process.env.BUILD_CONTROL_URL || "http://127.0.0.1:3000",
     token: process.env.BUILD_WORKER_TOKEN,
-    provider: createOpenAIProvider({ apiKey: process.env.OPENAI_API_KEY, baseUrl: process.env.OPENAI_BASE_URL, model: process.env.OPENAI_MODEL }),
+    providers: createProviderRegistry({openaiFactory:createOpenAIProvider}),
     signal: abort.signal,
   }).catch(error => { console.error(error.message); process.exitCode = 1; });
 }
+

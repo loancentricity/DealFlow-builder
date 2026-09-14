@@ -13,7 +13,13 @@ const state = {
   testKey: null,
   prompts: new Map(),
   buildKey: null,
+  historyProjectId: null,
   lastPoll: 0,
+  tool: "library",
+  toolKey: null,
+  importing: false,
+  providers: new Map(),
+  providerKey: null,
 };
 function element(tag, className, content) {
   const node = document.createElement(tag);
@@ -86,10 +92,13 @@ function updateControls() {
   $("conflict").hidden = !file?.conflict;
   const active = activeBuild();
   const building = active && ["queued", "running"].includes(active.status);
-  $("request-build").disabled = state.busy || Boolean(building);
+  const selectedProvider = (state.project?.agent?.providers || []).find(provider => provider.id === $("build-provider").value);
+  $("request-build").disabled = state.busy || Boolean(building) || selectedProvider?.available === false;
   $("request-build").textContent = building ? "Working on your message…" : "Send ↗";
   for (const id of ["apply-build", "cancel-build"]) if ($(id)) $(id).disabled = state.busy;
   if (active?.status === "review") for (const id of ["start-preview", "update-preview", "stop-preview"]) $(id).disabled = true;
+  document.querySelectorAll('[data-restore-checkpoint]').forEach(button => { button.disabled = state.busy || Boolean(active); });
+  $("delete-file").disabled = state.busy || !file;
 }
 async function operation(callback) {
   if (state.busy) return;
@@ -161,6 +170,7 @@ function renderProjects() {
     card.addEventListener("click", () => openProject(project.id));
     $("project-grid").append(card);
   }
+  renderLibrary();
 }
 function showCreate() {
   $("create-error").hidden = true;
@@ -170,6 +180,7 @@ function showCreate() {
 function showDashboard() {
   if (state.busy) return;
   state.syncEpoch++;
+  document.body.classList.remove("workspace-open");
   $("dashboard").hidden = false;
   $("workspace").hidden = true;
   $("breadcrumb-name").textContent = "Projects";
@@ -202,6 +213,7 @@ async function openProject(id) {
       setCodeVisible(false);
     }
     state.project = data;
+    document.body.classList.add("workspace-open");
     syncBuffers(data.files);
     renderWorkspace();
     $("dashboard").hidden = true;
@@ -264,6 +276,7 @@ function renderWorkspace() {
     "Connect an agent provider and isolated worker to enable coordinated execution.";
   renderEvents();
   renderBuilds();
+  renderTools();
   restoreTestResults();
   renderProjects();
   updateControls();
@@ -276,7 +289,7 @@ function renderPreview() {
   );
   $("preview-status").textContent = preview?.unavailable
     ? "Unavailable"
-    : candidate?.status === "review" && candidate.preview_url ? "Version to review" : running
+    : candidate?.status === "review" && candidate.preview_url ? "Latest version" : running
       ? "Running"
       : "Stopped";
   $("preview-dot").classList.toggle("live", running);
@@ -636,8 +649,11 @@ setInterval(async () => {
     state.project.events = data.events;
     state.project.builds = data.builds;
     state.project.agent = data.agent;
+    state.project.checkpoints = data.checkpoints;
+    state.project.storage = data.storage;
     renderPreview();
     renderBuilds();
+    renderTools();
     restoreTestResults();
     renderEvents();
     updateControls();
@@ -663,9 +679,8 @@ function activeBuild() {
   return (state.project?.builds || []).find((build) => ["queued", "running", "review"].includes(build.status));
 }
 function setCodeVisible(visible) {
-  document.querySelector(".files-panel").hidden = !visible;
-  document.querySelector(".editor-panel").hidden = !visible;
-  document.querySelector(".workbench").classList.toggle("code-visible", visible);
+  if (visible) openTool("files");
+  else if (state.tool === "files") openTool("library");
   $("toggle-code").textContent = visible ? "Hide code" : "Code";
   $("toggle-code").setAttribute("aria-expanded", String(visible));
 }
@@ -681,11 +696,12 @@ const editGuides = {
 document.querySelectorAll("[data-edit-action]").forEach(button => button.addEventListener("click", () => {
   const [guidance, example] = editGuides[button.dataset.editAction];
   document.querySelectorAll("[data-edit-action]").forEach(item => item.setAttribute("aria-pressed", String(item === button)));
-  $("edit-guidance").textContent = activeBuild()?.status === "review" ? `${guidance} Keep this version first to use it as the starting point. Your draft below will stay intact.` : guidance;
+  $("edit-guidance").textContent = guidance;
   $("build-prompt").placeholder = example;
   $("build-prompt").focus();
 }));
 function renderAvailability(agent) {
+  renderProviders(agent);
   const available = Boolean(agent?.available);
   $("builder-status").textContent = available ? "Builder connected" : "Builder not connected";
   $("builder-dot").classList.toggle("live", available);
@@ -701,14 +717,14 @@ function renderBuilds() {
   if (!progress) {
     progress = element("section", "build-progress"); progress.id = "build-progress";
     progress.setAttribute("role", "status"); progress.setAttribute("aria-live", "polite");
-    $("workspace").prepend(progress);
+    $("build-current").before(progress);
   }
   progress.hidden = !job;
   if (job) {
     const latestEvent = (state.project.events || []).find(event => event.task_id === job.task_id && ["GENERATION_STARTED", "REVIEW_STARTED", "REPAIR_STARTED"].includes(event.type));
     const stages = { GENERATION_STARTED: "Creating your website", REVIEW_STARTED: "Reviewing the generated files", REPAIR_STARTED: "Correcting issues found in review" };
     const seconds = Math.max(0, Math.floor((Date.now() - new Date(job.created_at).getTime()) / 1000));
-    progress.replaceChildren(element("span", "build-spinner", ""), element("strong", "", stages[latestEvent?.type] || (job.status === "queued" ? "Waiting for the builder" : "Build in progress")), element("span", "", `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed · This page updates automatically.`));
+    progress.replaceChildren(element("span", "build-spinner", ""), element("strong", "", stages[latestEvent?.type] || (job.status === "queued" ? "Waiting for the builder" : "Build in progress")), element("span", "", `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed`));
   }
   const key = JSON.stringify(builds);
   if (state.buildKey === key) return;
@@ -716,10 +732,10 @@ function renderBuilds() {
   const active = activeBuild();
   const latest = active || builds[0];
   const current = $("build-current"); current.replaceChildren(); current.hidden = !latest;
-  const labels = { queued: "Your request is queued", running: "Building your idea", review: "A new version is ready", applied: "This version is yours", failed: "This build needs another try", cancelled: "Version discarded" };
+  current.classList.toggle("completed", Boolean(latest && ["review", "applied", "cancelled"].includes(latest.status)));
+  const labels = { queued: "Request queued", running: "Building", review: "Preview updated", applied: "Saved", failed: "Build failed", cancelled: "Cancelled" };
   if (latest) {
-    current.append(element("span", `build-state ${latest.status}`, latest.status === "review" ? "READY FOR YOUR REVIEW" : latest.status.toUpperCase()), element("h3", "", labels[latest.status] || latest.status));
-    if (latest.summary) current.append(element("p", "", latest.summary));
+    current.append(element("span", `build-state ${latest.status}`, labels[latest.status] || latest.status));
     if (latest.error) current.append(element("p", "form-error", buildFailureMessage(latest)));
     if (latest.status === "failed") {
       notice(buildFailureMessage(latest), true);
@@ -744,16 +760,40 @@ function renderBuilds() {
     const review = typeof latest.review === "string" ? latest.review : latest.review?.summary;
     if (review) current.append(element("p", "", review));
     if (latest.status === "review") {
-      current.append(element("p", "", "Try the preview, then send your next instruction above to continue from this version. You can also keep it now or discard it."));
-      const keep = element("button", "primary full", "Keep this version"); keep.id = "apply-build"; keep.addEventListener("click", () => decideBuild(latest, "apply")); current.append(keep);
+      current.append(element("p", "", "Try your latest preview. Send another message to keep building from here."));
     }
     if (["queued", "running", "review"].includes(latest.status)) {
       const cancel = element("button", "text-button discard-button", latest.status === "review" ? "Discard version" : "Cancel build"); cancel.id = "cancel-build"; cancel.addEventListener("click", () => decideBuild(latest, "cancel")); current.append(cancel);
     }
   }
-  $("build-history").replaceChildren();
-  if (!builds.length) $("build-history").append(element("p", "muted", "Your first idea starts here. Each request and result will be saved."));
-  for (const build of builds) { const item = element("article", "request-item"); item.append(element("p", "", build.prompt), element("span", "", `${labels[build.status] || build.status} · ${date(build.created_at)}`)); $("build-history").append(item); }
+  const history = $("build-history");
+  const firstOpen = state.historyProjectId !== state.project.project.id;
+  const previousScroll = history.scrollTop;
+  const nearBottom = history.scrollHeight - previousScroll - history.clientHeight < 80;
+  const expandedMessages = new Set([...history.querySelectorAll('details[open][data-message-id]')].map(detail => detail.dataset.messageId));
+  state.historyProjectId = state.project.project.id;
+  history.replaceChildren();
+  if (!builds.length) { const welcome = element("div", "conversation-welcome"); welcome.append(element("span", "", "✧"), element("h3", "", "What will you make?"), element("p", "", "Describe your idea below. Your messages, changes, and results will stay together here.")); history.append(welcome); }
+  for (const build of [...builds].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))) {
+    const message = element("article", "chat-message user-message"); message.append(element("strong", "message-author", "You"));
+    if (build.prompt.length > 500) {
+      const fullMessage = element("details", "long-message"); fullMessage.dataset.messageId = build.id;
+      fullMessage.open = expandedMessages.has(build.id);
+      const summary = element("summary"); summary.append(element("span", "message-excerpt", `${build.prompt.slice(0, 220).trim()}…`), element("span", "message-expand-label", "Read full message"));
+      fullMessage.append(summary, element("p", "full-message-text", build.prompt)); message.append(fullMessage);
+      fullMessage.addEventListener("toggle", () => { summary.querySelector('.message-expand-label').textContent = fullMessage.open ? 'Collapse message' : 'Read full message'; });
+    } else message.append(element("p", "", build.prompt));
+    message.append(element("time", "", date(build.created_at))); history.append(message);
+    if (build.summary || build.error || ["queued", "running", "cancelled"].includes(build.status)) {
+      const reply = element("article", `chat-message assistant-message ${build.status}`); reply.append(element("strong", "message-author", "✧ DealFlow"));
+      reply.append(element("p", "", build.error ? buildFailureMessage(build) : build.summary || (build.status === "queued" ? "Your request is saved and waiting for the builder." : build.status === "running" ? "The builder is working on this request." : "This request was cancelled.")));
+      reply.append(element("span", "message-status", labels[build.status] || build.status)); history.append(reply);
+    }
+  }
+  if (firstOpen) {
+    const projectId = state.project.project.id;
+    requestAnimationFrame(() => { if (state.project?.project.id === projectId) history.scrollTop = history.scrollHeight; });
+  } else history.scrollTop = nearBottom ? history.scrollHeight : previousScroll;
 }
 async function requestBuild() {
   if (state.busy || ["queued", "running"].includes(activeBuild()?.status)) return;
@@ -771,13 +811,16 @@ async function requestBuild() {
         state.buffers.clear(); state.path = null;
         await refreshProject();
       }
-      const { build } = await api(projectApi("/builds"), { method: "POST", body: JSON.stringify({ prompt }) });
+      const provider = $("build-provider").value || "openai";
+      const providerStatus = (state.project.agent?.providers || []).find(item => item.id === provider);
+      if (providerStatus?.available === false) throw new Error(providerStatus.reason || `${providerStatus.name} is not configured.`);
+      const { build } = await api(projectApi("/builds"), { method: "POST", body: JSON.stringify({ prompt, provider }) });
       state.project.builds = [build, ...(state.project.builds || [])];
       $("build-prompt").value = ""; state.prompts.delete(state.project.project.id);
       renderBuilds(); await refreshProject(); state.lastPoll = 0;
       const latest = (state.project.builds || []).find((item) => item.id === build.id) || build;
       if (latest.status === "failed") notice(buildFailureMessage(latest), true);
-      else if (latest.status === "review") notice("Your new version is ready. Try the preview and decide whether to keep it.");
+      else if (latest.status === "review") notice("Your preview is updated. Send your next message to continue.");
       else notice("Your request is saved. The builder's progress and result will appear below.");
     } catch (error) { notice(`${error.message} Your idea is preserved below.`, true); }
   });
@@ -788,11 +831,172 @@ function buildFailureMessage(build) {
   return error || "The builder could not finish this request. Your request is saved so you can edit it and try again.";
 }
 async function decideBuild(build, action) {
-  if (action === "apply" && hasDrafts() && !confirm("You have unsaved code edits. Keep this generated version and discard those code drafts?")) return;
+  if (action === "apply" && hasDrafts() && !confirm("You have unsaved code edits. Save this generated version and discard those code drafts?")) return;
   await operation(async () => {
     const data = await api(projectApi(`/builds/${encodeURIComponent(build.id)}/${action}`), { method: "POST", body: "{}" });
     if (action === "apply") { state.buffers.clear(); state.path = null; state.previewUrl = null; if (data.preview) state.project.preview = data.preview; }
     await refreshProject();
-    notice(action === "apply" ? "Version kept. Tell us what you would like to improve next." : "Version discarded. Your saved website is unchanged.");
+    notice(action === "apply" ? "Version saved. You can download it or create a checkpoint now." : "Version discarded. Your saved website is unchanged.");
   });
+}
+
+// Workspace tools reuse the same editor and durable project state.
+for (const selector of ['.files-panel', '.editor-panel']) {
+  const panel = document.querySelector(selector); panel.hidden = false; $('source-tool-host').append(panel);
+}
+$('activity-tool-host').append(document.querySelector('.project-details'));
+$('agent-tool-host').append(document.querySelector('.agent-panel'));
+document.body.dataset.mobilePanel = 'preview';
+function openTool(tool) {
+  state.tool = tool;
+  document.querySelectorAll('[data-tool]').forEach(button => {
+    const selected = button.dataset.tool === tool;
+    button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
+    $(`tool-${button.dataset.tool}`).hidden = !selected;
+  });
+  $('toggle-code').textContent = tool === 'files' ? 'Hide code' : 'Code';
+  $('toggle-code').setAttribute('aria-expanded', String(tool === 'files'));
+  if (matchMedia('(max-width: 800px)').matches) setMobileView('tools');
+  if (tool === 'connections') loadConnections();
+}
+function setMobileView(view) {
+  document.body.dataset.mobilePanel = view;
+  document.querySelectorAll('[data-mobile-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mobileView === view)));
+}
+document.querySelectorAll('[data-mobile-view]').forEach(button => button.addEventListener('click', () => setMobileView(button.dataset.mobileView)));
+document.querySelectorAll('[data-tool]').forEach(button => {
+  button.addEventListener('click', () => openTool(button.dataset.tool));
+  button.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault(); const buttons = [...document.querySelectorAll('[data-tool]')];
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (buttons.indexOf(button) + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    openTool(buttons[index].dataset.tool); buttons[index].focus();
+  });
+});
+$('publish-project').addEventListener('click', () => openTool('publish'));
+$('library-search').addEventListener('input', renderLibrary);
+function renderLibrary() {
+  const list = $('tool-project-list'); if (!list) return;
+  const query = $('library-search').value.trim().toLowerCase();
+  const projects = state.projects.filter(project => project.name.toLowerCase().includes(query));
+  list.replaceChildren();
+  for (const project of projects) {
+    const button = element('button', `library-project${project.id === state.project?.project.id ? ' selected' : ''}`);
+    button.append(element('span', 'library-icon', '◇'), element('span', '', project.name));
+    button.addEventListener('click', () => openProject(project.id)); list.append(button);
+  }
+  if (!projects.length) list.append(element('p', 'muted', query ? 'No matching projects.' : 'No projects yet.'));
+}
+function renderTools() {
+  if (!state.project) return;
+  const storage = state.project.storage;
+  $('storage-summary').textContent = storage ? `${storage.file_count} files · ${Number(storage.bytes || 0).toLocaleString()} bytes` : `${state.project.files.length} files`;
+  $('download-project').href = projectApi('/export');
+  renderSavePreview();
+  if (document.activeElement !== $('rename-name')) $('rename-name').value = state.project.project.name;
+  const checkpoints = state.project.checkpoints || [];
+  const key = JSON.stringify([state.project.project.id, checkpoints, Boolean(activeBuild())]);
+  if (state.toolKey === key) return;
+  state.toolKey = key; $('checkpoint-list').replaceChildren();
+  if (!checkpoints.length) $('checkpoint-list').append(element('p', 'muted', 'No checkpoints yet. Save your first one above.'));
+  for (const checkpoint of checkpoints) {
+    const item = element('article', 'checkpoint-item'); item.append(element('strong', '', checkpoint.label), element('span', '', `${checkpoint.file_count} files · ${date(checkpoint.created_at)}`));
+    const restore = element('button', 'secondary compact', 'Restore'); restore.dataset.restoreCheckpoint = checkpoint.id; restore.disabled = Boolean(activeBuild()) || state.busy;
+    restore.title = activeBuild() ? 'Finish or cancel the active build before restoring.' : `Restore ${checkpoint.label}`;
+    restore.addEventListener('click', () => restoreCheckpoint(checkpoint)); item.append(restore); $('checkpoint-list').append(item);
+  }
+}
+$('rename-form').addEventListener('submit', event => {
+  event.preventDefault(); const name = $('rename-name').value.trim(); if (!name) return;
+  operation(async () => { await api(projectApi(), { method: 'PATCH', body: JSON.stringify({ name }) }); await refreshProject(); await loadProjects(); notice('Project renamed.'); });
+});
+$('duplicate-form').addEventListener('submit', async event => {
+  event.preventDefault(); const name = $('duplicate-name').value.trim(); if (!name) return;
+  let copy;
+  await operation(async () => { const data = await api(projectApi('/duplicate'), { method: 'POST', body: JSON.stringify({ name }) }); copy = data.project; $('duplicate-name').value = ''; await loadProjects(); notice(`Created ${copy.name}.`); });
+  if (copy) await openProject(copy.id);
+});
+$('add-file-form').addEventListener('submit', event => {
+  event.preventDefault(); const path = $('new-file-path').value.trim(); if (!path) return;
+  operation(async () => { const { file } = await api(projectApi('/files'), { method: 'POST', body: JSON.stringify({ path, content: '' }) }); state.path = file.path; $('new-file-path').value = ''; await refreshProject(); notice(`Created ${file.path}.`); });
+});
+$('delete-file').addEventListener('click', () => {
+  const file = currentBuffer(); if (!file || state.busy) return;
+  if (!confirm(`Delete ${state.path}?${file.content !== file.saved ? ' Its unsaved draft will also be removed.' : ''} Save a checkpoint first if you may want it back.`)) return;
+  operation(async () => { const path = state.path; await api(projectApi('/files'), { method: 'DELETE', body: JSON.stringify({ path, version: file.version }) }); state.buffers.delete(path); state.path = null; await refreshProject(); notice(`Deleted ${path}.`); });
+});
+$('checkpoint-form').addEventListener('submit', event => {
+  event.preventDefault(); const label = $('checkpoint-label').value.trim(); if (!label) return;
+  operation(async () => { await api(projectApi('/checkpoints'), { method: 'POST', body: JSON.stringify({ label }) }); $('checkpoint-label').value = ''; await refreshProject(); notice('Checkpoint saved from your saved project files.'); });
+});
+async function restoreCheckpoint(checkpoint) {
+  if (activeBuild() || state.busy) return;
+  if (!confirm(`Restore checkpoint “${checkpoint.label}”? This replaces your current project files${hasDrafts() ? ' and discards your unsaved code drafts' : ''}.`)) return;
+  await operation(async () => {
+    const versions = Object.fromEntries(state.project.files.map(file => [file.path, file.version]));
+    await api(projectApi(`/checkpoints/${encodeURIComponent(checkpoint.id)}/restore`), { method: 'POST', body: JSON.stringify({ versions }) });
+    state.buffers.clear(); state.path = null; state.previewUrl = null; await refreshProject();
+    try { await api(projectApi('/preview'), { method: 'POST', body: JSON.stringify({ action: state.project.preview?.running ? 'update' : 'start' }) }); await refreshProject(); notice(`Restored “${checkpoint.label}” and refreshed the preview.`); }
+    catch (error) { notice(`Restored “${checkpoint.label}”. The preview could not restart: ${error.message}`, true); }
+  });
+}
+async function loadConnections() {
+  $('connections-list').replaceChildren(element('p', 'muted', 'Checking connections…'));
+  try {
+    const { connections } = await api('/api/connections'); $('connections-list').replaceChildren();
+    if (!connections.length) $('connections-list').append(element('p', 'muted', 'No services are connected.'));
+    for (const connection of connections) {
+      const item = element('article', 'connection-item'); item.append(element('strong', '', connection.name), element('span', '', connection.status), element('p', 'muted', connection.detail)); $('connections-list').append(item);
+    }
+  } catch (error) { $('connections-list').replaceChildren(element('p', 'form-error', `Connections could not be checked: ${error.message}`)); }
+}
+$('refresh-connections').addEventListener('click', loadConnections);
+$('import-project').addEventListener('click', () => $('import-zip').click());
+$('import-zip').addEventListener('change', async () => {
+  const file = $('import-zip').files[0]; if (!file || state.importing) return;
+  state.importing = true; $('import-project').disabled = true; $('import-project').textContent = 'Importing…';
+  try {
+    const name = file.name.replace(/\.zip$/i, '').slice(0, 80) || 'Imported project';
+    const { project, report } = await api('/api/import', { method: 'POST', body: file, headers: { 'Content-Type': 'application/zip', 'X-Project-Name': encodeURIComponent(name) } });
+    await loadProjects(); await openProject(project.id);
+    const warnings = report?.warnings || [];
+    notice(`Imported ${project.name}.${warnings.length ? ` ${warnings.join(' ')}` : ' Your source is saved as an independent project.'}`);
+  } catch (error) { notice(`Import failed: ${error.message}`, true); }
+  finally { state.importing = false; $('import-project').disabled = false; $('import-project').textContent = 'Import ZIP'; $('import-zip').value = ''; }
+});
+function renderProviders(agent) {
+  const providers = agent?.providers || [{ id: 'openai', name: 'OpenAI', available: Boolean(agent?.available), reason: agent?.reason }];
+  const projectId = state.project?.project.id || 'dashboard';
+  const choice = state.providers.get(projectId) || 'openai';
+  const key = JSON.stringify([projectId, choice, providers]);
+  if (state.providerKey === key) return;
+  state.providerKey = key; $('build-provider').replaceChildren();
+  for (const provider of providers) {
+    const option = element('option', '', `${provider.name}${provider.model ? ` · ${provider.model}` : ''}${provider.available ? '' : ' · Not configured'}`);
+    option.value = provider.id; option.disabled = !provider.available; option.selected = provider.id === choice;
+    $('build-provider').append(option);
+  }
+  if (!providers.some(provider => provider.id === choice)) {
+    const missing = element('option', '', `${choice} · Unavailable`); missing.value = choice; missing.disabled = true; missing.selected = true; $('build-provider').append(missing);
+  }
+  const selected = providers.find(provider => provider.id === choice);
+  $('provider-reason').textContent = selected?.available ? '' : selected?.reason || 'This provider is not connected. Choose an available provider or check Connections.';
+}
+$('build-provider').addEventListener('change', () => {
+  if (state.project) state.providers.set(state.project.project.id, $('build-provider').value);
+  state.providerKey = null; renderProviders(state.project?.agent); updateControls();
+});
+function renderSavePreview() {
+  let section = $('checkpoint-preview');
+  if (!section) {
+    section = element('section', 'checkpoint-preview'); section.id = 'checkpoint-preview';
+    section.append(element('strong', '', 'Latest preview'), element('p', 'muted', 'Save this preview to your project before downloading it or making a checkpoint. You can also continue by sending another message.'));
+    const save = element('button', 'primary compact', 'Save this version'); save.id = 'apply-build';
+    save.addEventListener('click', () => { const candidate = activeBuild(); if (candidate?.status === 'review') decideBuild(candidate, 'apply'); });
+    section.append(save); $('tool-checkpoints').prepend(section);
+  }
+  const candidate = activeBuild();
+  section.hidden = candidate?.status !== 'review';
+  $('apply-build').hidden = candidate?.status !== 'review';
+  $('apply-build').disabled = state.busy || candidate?.status !== 'review';
 }

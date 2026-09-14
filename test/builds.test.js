@@ -8,9 +8,43 @@ import { createBuildService } from '../server/build-service.js';
 import { createPreviewWorker } from '../server/preview-worker.js';
 import { starterFiles } from '../server/domain.js';
 import { migrate } from '../server/migrate.js';
+import { createApp } from '../server/app.js';
 
 const listen = async server => { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; };
 const close = server => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); });
+
+test('applying a build cannot reuse a deleted file version and accept a stale draft', {skip:!process.env.DATABASE_URL}, async t=>{
+  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL});
+  let app,worker,projectId;
+  t.after(async()=>{
+    if(app?.listening) await close(app);
+    if(worker?.listening) await close(worker);
+    try { if(projectId) { await pool.query('DELETE FROM builds WHERE project_id=$1',[projectId]); await pool.query('DELETE FROM projects WHERE id=$1',[projectId]); } }
+    finally { await pool.end(); }
+  });
+  await migrate(pool);
+  const token=randomUUID(); worker=createPreviewWorker({token}); const workerUrl=await listen(worker);
+  app=createApp({pool,workerUrl,workerToken:token,previewPublicUrl:workerUrl}); const base=await listen(app);
+  const api=async(path,method='GET',body)=>{
+    const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
+    return {status:response.status,data:await response.json()};
+  };
+  const project=await api('/api/projects','POST',{name:'Deleted-path build regression'}); assert.equal(project.status,201);
+  projectId=project.data.project.id; const root=`/api/projects/${projectId}`;
+  const added=await api(`${root}/files`,'POST',{path:'extra.js',content:'// old browser source'}); assert.equal(added.status,201);
+  const oldVersion=added.data.file.version;
+  assert.equal((await api(`${root}/files`,'DELETE',{path:'extra.js',version:oldVersion})).status,200);
+  const files=(await api(root)).data.files, task=randomUUID(),build=randomUUID();
+  const candidate=[...files.map(({path,content})=>({path,content})),{path:'extra.js',content:'// reviewed replacement'}];
+  // Seed a reviewed fixture directly: this test concerns application/versioning, not generation.
+  await pool.query("INSERT INTO tasks(id,project_id,kind,status) VALUES($1,$2,'agent-build','completed')",[task,projectId]);
+  await pool.query("INSERT INTO builds(id,project_id,task_id,status,prompt,base_versions,source_files,candidate_files,snapshot_id) VALUES($1,$2,$3,'review',$4,$5,$6,$7,$8)",[build,projectId,task,'Synthetic reviewed replacement',Object.fromEntries(files.map(file=>[file.path,file.version])),JSON.stringify(files),JSON.stringify(candidate),randomBytes(32).toString('hex')]);
+  assert.equal((await api(`${root}/builds/${build}/apply`,'POST',{})).status,200);
+  const replacement=(await api(root)).data.files.find(file=>file.path==='extra.js');
+  assert.ok(replacement.version>oldVersion,'recreated source receives a strictly newer version');
+  assert.equal((await api(`${root}/files`,'PUT',{path:'extra.js',content:'// stale overwrite',version:oldVersion})).status,409);
+  assert.equal((await api(root)).data.files.find(file=>file.path==='extra.js').content,'// reviewed replacement');
+});
 
 test('real PostgreSQL build queue authenticates workers, reviews candidates, protects source versions, and cancels leases', { skip: !process.env.DATABASE_URL }, async t => {
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
