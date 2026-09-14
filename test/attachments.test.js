@@ -104,7 +104,7 @@ test('ZIP attachments preserve large originals, enforce project scope, and exclu
   assert.equal((await api(`${root}/attachments`)).data.attachments.length,1,'failed uploads create no attachment rows');
   await api(`${root}/builds/${claimed.data.build.id}/cancel`,'POST',{});
   const fixtures = [
-    {name:'notes.txt',type:'text/plain',data:Buffer.from('Synthetic plain text requirement: use a blue header.')},
+    {name:'notes.txt',type:'text/plain',data:Buffer.from('PK is a text prefix. Synthetic plain text requirement: use a blue header.')},
     {name:'reference.png',type:'image/png',data:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jD1kAAAAASUVORK5CYII=','base64')},
     {name:'brief.pdf',type:'application/pdf',data:Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF')},
     {name:'opaque.bin',type:'application/octet-stream',data:Buffer.from([0,1,2,255])},

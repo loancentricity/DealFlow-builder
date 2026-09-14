@@ -30,7 +30,7 @@ function hasSecret(content) { return /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIV
 function crc32(bytes) { let crc=0xffffffff; for(const byte of bytes) { crc^=byte; for(let bit=0;bit<8;bit++) crc=(crc>>>1)^((crc&1)?0xedb88320:0); } return (crc^0xffffffff)>>>0; }
 async function detectType(file,name,size) {
   const head=await readAt(file,0,Math.min(size,16));
-  if(/\.zip$/i.test(name) || head.subarray(0,2).toString('ascii')==='PK') return 'application/zip';
+  if(/\.zip$/i.test(name) || (head.length>=4 && [0x04034b50,0x06054b50,0x08074b50].includes(head.readUInt32LE(0)))) return 'application/zip';
   if(head.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png';
   if(head.length>=3 && head[0]===255 && head[1]===216 && head[2]===255) return 'image/jpeg';
   if(['GIF87a','GIF89a'].includes(head.subarray(0,6).toString('ascii'))) return 'image/gif';
