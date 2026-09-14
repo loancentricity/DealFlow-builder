@@ -52,6 +52,38 @@ try {
   const detail = await (
     await page.request.get(`${base}/api/projects/${project.id}`)
   ).json();
+  // Attach only this synthetic test project's own export. Uploading is available
+  // without a model connection and must not submit or erase the message draft.
+  const exportPath=await page.locator("#download-project").getAttribute("href");
+  assert.ok(exportPath,"saved source export link exists");
+  const exported=await page.request.get(new URL(exportPath,base).href);
+  assert.equal(exported.status(),200);
+  const attachmentName="synthetic-browser-source.zip";
+  const unsent="Keep this unsent message while the ZIP uploads.";
+  await page.locator("#build-prompt").fill(unsent);
+  const attachmentResponse=page.waitForResponse(response=>response.request().method()==="POST"&&response.url().endsWith(`/projects/${project.id}/attachments`));
+  await page.locator("#attachment-picker").setInputFiles({name:attachmentName,mimeType:"application/zip",buffer:await exported.body()});
+  assert.equal((await attachmentResponse).status(),201);
+  const attachmentChoice=page.getByLabel(`Use ${attachmentName} with message`,{exact:true});
+  await attachmentChoice.waitFor({state:"visible"});
+  assert.equal(await attachmentChoice.isChecked(),true);
+  assert.equal(await page.locator("#build-prompt").inputValue(),unsent);
+  const attached=(await (await page.request.get(`${base}/api/projects/${project.id}`)).json());
+  assert.ok(attached.attachments.some(item=>item.name===attachmentName));
+  assert.deepEqual(attached.files,detail.files,"attachment upload does not alter saved project source");
+  const dropName = 'synthetic-dropped-source.zip';
+  const dropped = await page.evaluateHandle(({bytes,name}) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([new Uint8Array(bytes)], name, {type:'application/zip'}));
+    return transfer;
+  }, {bytes:[...await exported.body()],name:dropName});
+  const dropResponse = page.waitForResponse(response => response.request().method()==='POST' && response.url().endsWith(`/projects/${project.id}/attachments`));
+  await page.locator('#build-prompt').dispatchEvent('drop', {dataTransfer:dropped});
+  assert.equal((await dropResponse).status(),201,'dropping onto the message textarea uploads a ZIP');
+  await page.getByLabel(`Use ${dropName} with message`,{exact:true}).waitFor({state:'visible'});
+  assert.equal(await page.locator('#build-prompt').inputValue(),unsent,'dropping preserves the typed message');
+  await dropped.dispose();
+  await page.locator("#build-prompt").fill("");
   const file = detail.files.find((file) => file.path === "index.html");
   const concurrent = await page.request.put(
     `${base}/api/projects/${project.id}/files`,
@@ -166,7 +198,7 @@ try {
   });
   assert.deepEqual(errors, [], "no uncaught browser errors");
   console.log(
-    "PASS: create → edit → save → reload → concurrent conflict → interactive preview → update → checks → stop; desktop/mobile screenshots in test-results/.",
+    "PASS: create → edit → save → reload → synthetic ZIP attachment with preserved draft → concurrent conflict → interactive preview → update → checks → stop; desktop/mobile screenshots in test-results/.",
   );
 } catch (error) {
   await page.screenshot({ path: "test-results/failure.png", fullPage: true });

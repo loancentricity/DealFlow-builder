@@ -20,6 +20,9 @@ const state = {
   importing: false,
   providers: new Map(),
   providerKey: null,
+  attachmentSelections: new Map(),
+  uploads: new Map(),
+  attachmentKey: null,
 };
 function element(tag, className, content) {
   const node = document.createElement(tag);
@@ -93,8 +96,9 @@ function updateControls() {
   const active = activeBuild();
   const building = active && ["queued", "running"].includes(active.status);
   const selectedProvider = (state.project?.agent?.providers || []).find(provider => provider.id === $("build-provider").value);
-  $("request-build").disabled = state.busy || Boolean(building) || selectedProvider?.available === false;
-  $("request-build").textContent = building ? "Working on your message…" : "Send ↗";
+  const uploading = [...state.uploads.values()].some(upload => upload.projectId === state.project?.project.id && upload.status === 'uploading');
+  $("request-build").disabled = state.busy || Boolean(building) || uploading || selectedProvider?.available === false;
+  $("request-build").textContent = building ? "Working on your message…" : uploading ? "Uploading attachments…" : "Send ↗";
   for (const id of ["apply-build", "cancel-build"]) if ($(id)) $(id).disabled = state.busy;
   if (active?.status === "review") for (const id of ["start-preview", "update-preview", "stop-preview"]) $(id).disabled = true;
   document.querySelectorAll('[data-restore-checkpoint]').forEach(button => { button.disabled = state.busy || Boolean(active); });
@@ -209,6 +213,8 @@ async function openProject(id) {
       state.path = null;
       state.testKey = null;
       state.buildKey = null;
+      state.attachmentKey = null;
+      $("attachment-errors").textContent = '';
       $("build-prompt").value = state.prompts.get(id) || "";
       setCodeVisible(false);
     }
@@ -277,6 +283,7 @@ function renderWorkspace() {
   renderEvents();
   renderBuilds();
   renderTools();
+  renderAttachments();
   restoreTestResults();
   renderProjects();
   updateControls();
@@ -651,9 +658,11 @@ setInterval(async () => {
     state.project.agent = data.agent;
     state.project.checkpoints = data.checkpoints;
     state.project.storage = data.storage;
+    state.project.attachments = data.attachments;
     renderPreview();
     renderBuilds();
     renderTools();
+    renderAttachments();
     restoreTestResults();
     renderEvents();
     updateControls();
@@ -798,7 +807,8 @@ function renderBuilds() {
 async function requestBuild() {
   if (state.busy || ["queued", "running"].includes(activeBuild()?.status)) return;
   const prompt = $("build-prompt").value.trim();
-  if (!prompt) { $("build-prompt").focus(); return; }
+  if (!prompt) { notice('Add a message telling the builder what you would like it to do with your project or attached ZIPs.'); $("build-prompt").focus(); return; }
+  if ([...state.uploads.values()].some(upload => upload.projectId === state.project.project.id && upload.status === 'uploading')) { notice('Wait for your ZIP uploads to finish before sending the message.'); return; }
   await operation(async () => {
     notice("Sending your idea to the builder…");
     try {
@@ -814,7 +824,9 @@ async function requestBuild() {
       const provider = $("build-provider").value || "openai";
       const providerStatus = (state.project.agent?.providers || []).find(item => item.id === provider);
       if (providerStatus?.available === false) throw new Error(providerStatus.reason || `${providerStatus.name} is not configured.`);
-      const { build } = await api(projectApi("/builds"), { method: "POST", body: JSON.stringify({ prompt, provider }) });
+      const selected = state.attachmentSelections.get(state.project.project.id) || new Set();
+      const attachment_ids = [...selected];
+      const { build } = await api(projectApi("/builds"), { method: "POST", body: JSON.stringify({ prompt, provider, attachment_ids }) });
       state.project.builds = [build, ...(state.project.builds || [])];
       $("build-prompt").value = ""; state.prompts.delete(state.project.project.id);
       renderBuilds(); await refreshProject(); state.lastPoll = 0;
@@ -1000,3 +1012,103 @@ function renderSavePreview() {
   $('apply-build').hidden = candidate?.status !== 'review';
   $('apply-build').disabled = state.busy || candidate?.status !== 'review';
 }
+
+const MAX_ATTACHMENT_BYTES = 250 * 1024 * 1024;
+function attachmentSize(bytes) { return `${(Number(bytes) / (1024 * 1024)).toFixed(Number(bytes) < 1024 * 1024 ? 2 : 1)} MiB`; }
+function attachmentError(message) { $('attachment-errors').append(element('p', 'form-error', message)); }
+function renderAttachments() {
+  if (!state.project) return;
+  const projectId = state.project.project.id;
+  const attachments = state.project.attachments || [];
+  const selected = state.attachmentSelections.get(projectId) || new Set();
+  state.attachmentSelections.set(projectId, selected);
+  const key = JSON.stringify([projectId, attachments, [...selected]]);
+  if (key !== state.attachmentKey) {
+    state.attachmentKey = key;
+    const list = $('attachment-list'); const scrollTop = list.scrollTop; list.replaceChildren();
+    for (const attachment of attachments) {
+      const card = element('article', 'attachment-card');
+      const header = element('div', 'attachment-card-heading'); header.append(element('strong', '', attachment.name), element('span', '', attachmentSize(attachment.bytes)));
+      const status = element('span', 'attachment-status', 'Stored with project');
+      const label = element('label', 'attachment-selection');
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selected.has(attachment.id); checkbox.setAttribute('aria-label', `Use ${attachment.name} with message`);
+      checkbox.addEventListener('change', () => { if (checkbox.checked) selected.add(attachment.id); else selected.delete(attachment.id); state.attachmentKey = JSON.stringify([projectId, state.project?.project.id === projectId ? state.project.attachments || [] : attachments, [...selected]]); });
+      label.append(checkbox, element('span', '', 'Use with message')); card.append(header, status, label);
+      if (attachment.download_url) { const link = element('a', 'attachment-download', 'Download'); link.href = attachment.download_url; link.download = attachment.name; card.append(link); }
+      list.append(card);
+    }
+    list.scrollTop = scrollTop;
+  }
+  renderUploads();
+}
+function renderUploads() {
+  const list = $('upload-list'); const scrollTop = list.scrollTop; list.replaceChildren();
+  for (const upload of state.uploads.values()) {
+    if (upload.projectId !== state.project?.project.id || upload.status === 'stored') continue;
+    const card = element('article', 'upload-card'); card.dataset.uploadId = upload.id; card.append(element('strong', '', upload.name));
+    if (upload.status === 'uploading') {
+      const progress = document.createElement('progress'); progress.max = upload.bytes; progress.value = upload.loaded; progress.setAttribute('aria-label', `Uploading ${upload.name}`);
+      const detail = upload.loaded >= upload.bytes ? 'Transfer complete · storing with project…' : `${attachmentSize(upload.loaded)} of ${attachmentSize(upload.bytes)} uploaded`;
+      const cancel = element('button', 'text-button', 'Cancel upload'); cancel.type = 'button'; cancel.addEventListener('click', () => upload.xhr.abort());
+      card.append(progress, element('span', 'upload-detail', detail), cancel);
+    } else {
+      card.append(element('span', upload.status === 'error' ? 'form-error' : '', upload.message));
+      const dismiss = element('button', 'text-button', 'Dismiss'); dismiss.type = 'button'; dismiss.addEventListener('click', () => { state.uploads.delete(upload.id); renderUploads(); }); card.append(dismiss);
+    }
+    list.append(card);
+  }
+  list.scrollTop = scrollTop;
+}
+async function refreshAttachmentMetadata(projectId) {
+  try {
+    const data = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+    if (state.project?.project.id !== projectId) return;
+    state.project.attachments = data.attachments || []; state.syncEpoch++; renderAttachments();
+  } catch { /* Upload status remains visible; the ordinary project refresh can retry. */ }
+}
+function uploadAttachment(file) {
+  if (!state.project) return;
+  if (!/\.zip$/i.test(file.name)) { attachmentError(`${file.name}: choose a ZIP file. Zip folders before attaching them.`); return; }
+  if (file.size > MAX_ATTACHMENT_BYTES) { attachmentError(`${file.name}: ZIP files must be 250 MiB or smaller.`); return; }
+  if (!file.size) { attachmentError(`${file.name}: this file is empty. Choose a ZIP that contains your project.`); return; }
+  const projectId = state.project.project.id; const xhr = new XMLHttpRequest();
+  const upload = { id: crypto.randomUUID(), projectId, name: file.name, bytes: file.size, loaded: 0, status: 'uploading', xhr };
+  state.uploads.set(upload.id, upload); renderUploads(); updateControls();
+  const finishError = (message, status = 'error') => { upload.status = status; upload.message = message; renderUploads(); updateControls(); refreshAttachmentMetadata(projectId); };
+  xhr.open('POST', `/api/projects/${encodeURIComponent(projectId)}/attachments`);
+  xhr.setRequestHeader('Content-Type', 'application/zip'); xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+  xhr.responseType = 'json'; xhr.timeout = 10 * 60 * 1000;
+  xhr.upload.addEventListener('progress', event => {
+    upload.loaded = event.loaded;
+    const card = [...$('upload-list').children].find(item => item.dataset.uploadId === upload.id);
+    const progress = card?.querySelector('progress'); if (!progress) return;
+    progress.value = upload.loaded;
+    card.querySelector('.upload-detail').textContent = upload.loaded >= upload.bytes ? 'Transfer complete · storing with project…' : `${attachmentSize(upload.loaded)} of ${attachmentSize(upload.bytes)} uploaded`;
+  });
+  xhr.addEventListener('load', () => {
+    const data = xhr.response || {};
+    if (xhr.status < 200 || xhr.status >= 300) { finishError(typeof data.error === 'string' ? data.error : `Upload failed (${xhr.status}).`); return; }
+    if (!data.attachment?.id) { finishError('The upload response was incomplete. Refresh the project to check whether the ZIP was stored.'); return; }
+    upload.status = 'stored'; state.uploads.delete(upload.id);
+    const selected = state.attachmentSelections.get(projectId) || new Set(); selected.add(data.attachment.id); state.attachmentSelections.set(projectId, selected);
+    if (state.project?.project.id === projectId) { state.syncEpoch++; state.project.attachments = [data.attachment, ...(state.project.attachments || []).filter(item => item.id !== data.attachment.id)]; renderAttachments(); updateControls(); }
+  });
+  xhr.addEventListener('error', () => finishError('Upload failed because the connection was interrupted. Check your connection and try again.'));
+  xhr.addEventListener('timeout', () => finishError('Upload timed out after 10 minutes. Check the stored attachments before trying again.'));
+  xhr.addEventListener('abort', () => finishError('Upload cancelled. If the transfer already finished, its file may still appear below.', 'cancelled'));
+  xhr.send(file);
+}
+$('attach-zip').addEventListener('click', () => $('attachment-picker').click());
+$('attachment-picker').addEventListener('change', () => { $('attachment-errors').replaceChildren(); for (const file of $('attachment-picker').files) uploadAttachment(file); $('attachment-picker').value = ''; });
+let attachmentDragDepth = 0;
+function isFileDrag(event) { return [...(event.dataTransfer?.types || [])].includes('Files'); }
+$('build-form').addEventListener('dragenter', event => { if (!isFileDrag(event)) return; event.preventDefault(); attachmentDragDepth++; $('build-form').classList.add('attachment-drop-active'); });
+$('build-form').addEventListener('dragover', event => { if (!isFileDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
+$('build-form').addEventListener('dragleave', event => { if (!isFileDrag(event)) return; attachmentDragDepth = Math.max(0, attachmentDragDepth - 1); if (!attachmentDragDepth) $('build-form').classList.remove('attachment-drop-active'); });
+$('build-form').addEventListener('drop', event => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault(); attachmentDragDepth = 0; $('build-form').classList.remove('attachment-drop-active'); $('attachment-errors').replaceChildren();
+  const items = [...(event.dataTransfer.items || [])].filter(item => item.kind === 'file');
+  if (!items.length) { for (const file of event.dataTransfer.files) uploadAttachment(file); return; }
+  for (const item of items) { const entry = item.webkitGetAsEntry?.(); if (entry?.isDirectory) { attachmentError(`${entry.name}: Zip the folder first.`); continue; } const file = item.getAsFile(); if (file) uploadAttachment(file); }
+});

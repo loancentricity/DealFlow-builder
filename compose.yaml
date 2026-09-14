@@ -18,6 +18,8 @@ services:
       context: .
       target: control
     networks: [database, preview-link]
+    volumes:
+      - attachment-data:/app/data/attachments
     command: ["sh", "-c", "npm run migrate && npm start"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:?Set POSTGRES_DB}
@@ -55,6 +57,7 @@ services:
     pids_limit: 64
 volumes:
   postgres-data:
+  attachment-data:
 networks:
   database:
     internal: true

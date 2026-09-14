@@ -94,3 +94,11 @@ The workspace separates conversation, preview, and tools on mobile. Tools expose
 
 ZIP import/export targets the supported static HTML/CSS/JavaScript project format. It does not establish full Replit runtime compatibility or lossless preservation of arbitrary application archives. Broader independent Replit migration must retain unsupported and unfinished source, inventory manifests/databases/assets/integrations, identify secret-file handling, and produce readiness reports before execution. That full preservation and runtime workflow remains backlog. Check the current implementation status for verification of the workspace and ZIP increment.
 
+
+## ZIP attachments in the conversation
+
+Drop ZIP files onto the message composer or use Attach ZIP. Uploads stay with the current project and preserve the original archive; they do not replace saved source or switch projects. Progress, cancellation, retryable errors, and a download link are available in the composer. The upload limit is 250 MiB per ZIP, with 1 GiB and 20 attachments per project; two uploads can be received concurrently.
+
+Choose which attachments to use, then send an instruction. The worker receives a bounded inventory and selected text-source excerpts, not the entire large archive. Credentials and dependency paths are excluded from that context. Uploading alone makes no model request and never executes archive code. Raw archives stay in local attachment storage, so retain sensitive originals with appropriate care. This is separate from the dashboard's small static-source importer and does not enable server runtimes.
+
+`ATTACHMENT_STORAGE_DIR` selects the local storage directory; by default it is `data/attachments`. Back up that directory with PostgreSQL: metadata alone cannot reconstruct the archives. Docker Compose mounts a separate `attachment-data` volume for them. ZIP structure is validated before an attachment is stored; unsafe paths, links, encrypted archives, and excessive advertised expansion are rejected. Selected text excerpts are bounded and validated separately when preparing a build.

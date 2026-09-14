@@ -13,7 +13,7 @@ test("a repair preserves generated files omitted from the correction response", 
     const body = JSON.parse(raw);
     let data = { ok: true };
     if (req.url.endsWith("/claim")) {
-      data = { build: claimed ? null : { id: "fixture", prompt: "Synthetic test", source_files: starterFiles, lease_token: "fixture-lease" } };
+      data = { build: claimed ? null : { id: "fixture", prompt: "Synthetic test", source_files: starterFiles, attachments: [{name:'reference.zip',files:[{path:'README.md',content:'Synthetic attachment requirement'}]}], lease_token: "fixture-lease" } };
       claimed = true;
     }
     if (req.url.endsWith("/complete")) { completed = body; abort.abort(); }
@@ -27,12 +27,13 @@ test("a repair preserves generated files omitted from the correction response", 
       provider: {
         probe: async () => {},
         build: async input => {
+          assert.equal(input.attachments[0].name, 'reference.zip');
           calls++;
           if (calls === 1) return { summary: "First generated version", files: [{ path: "index.html", content: html }] };
           assert.equal(input.source_files.find(file => file.path === "index.html").content, html);
           return { summary: "Corrected JavaScript", files: [{ path: "app.js", content: "/* corrected test fixture */" }] };
         },
-        review: async () => ({ approved: ++reviews === 2, summary: "Test-only review decision." }),
+        review: async input => { assert.equal(input.attachments[0].files[0].content, 'Synthetic attachment requirement'); return { approved: ++reviews === 2, summary: "Test-only review decision." }; },
       },
     });
     assert.equal(calls, 2);

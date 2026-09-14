@@ -11,6 +11,7 @@ import {
 import { createBuildService } from "./build-service.js";
 import { createCheckpointService } from "./checkpoint-service.js";
 import { createProjectService, requireIdle, validateSourceSet } from "./project-service.js";
+import { createAttachmentService } from "./attachment-service.js";
 import { json, readJson } from "./http.js";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function createApp({
@@ -19,6 +20,7 @@ export function createApp({
   workerToken,
   previewPublicUrl,
   buildWorkerToken,
+  attachmentStorageRoot,
 }) {
   const worker = async (path, method = "GET", body) => {
     if (!workerUrl || !workerToken)
@@ -84,9 +86,11 @@ export function createApp({
     removeSnapshot: id => worker(`/internal/snapshots/${id}`, "DELETE"),
     previewUrl: id => publicPreview(id).url,
   });
+  const attachments = createAttachmentService({ pool, storageRoot: attachmentStorageRoot });
   const builds = createBuildService({
     pool, workerToken: buildWorkerToken,
     captureCheckpoint: checkpoints.capture,
+    readAttachmentContext: attachments.readContext,
     publishSnapshot: (id, files) => worker("/internal/snapshots", "POST", { id, files }),
     removeSnapshot: id => worker(`/internal/snapshots/${id}`, "DELETE"),
     previewUrl: id => publicPreview(id).url,
@@ -105,6 +109,7 @@ export function createApp({
         throw invalid("Cross-site requests are not allowed.", 403);
       const path = new URL(req.url, `http://${authority}`).pathname;
       if (await builds.handle(req, res, path)) return;
+      if (await attachments.handle(req, res, path)) return;
       if (await checkpoints.handle(req, res, path)) return;
       if (await projects.handle(req, res, path)) return;
       if (path === '/api/connections' && req.method === 'GET') {
@@ -224,6 +229,7 @@ export function createApp({
           data.agent = await builds.status();
           data.builds = await builds.list(id);
           data.checkpoints = await checkpoints.list(id);
+          data.attachments = await attachments.list(id);
           data.storage = { file_count: data.files.length, bytes: data.files.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0) };
           return json(res, 200, data);
         }
@@ -390,6 +396,6 @@ export function createApp({
       });
     }
   });
-  server.requestTimeout = 10000;
+  server.requestTimeout = 600000;
   return server;
 }

@@ -12,7 +12,7 @@ const text = (value, max, label) => {
 const versions = files => Object.fromEntries(files.map(f => [f.path, f.version]));
 const sameVersions = (a,b) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(k => a[k] === b[k]);
 
-export function createBuildService({ pool, workerToken, publishSnapshot, removeSnapshot, previewUrl, captureCheckpoint = async () => {} }) {
+export function createBuildService({ pool, workerToken, publishSnapshot, removeSnapshot, previewUrl, captureCheckpoint = async () => {}, readAttachmentContext = async () => [] }) {
   const configured = typeof workerToken === "string" && workerToken.length >= 24;
   const tx = async fn => {
     const c = await pool.connect();
@@ -22,7 +22,7 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
   };
   const event = (c,b,type,message,extra={}) => c.query("INSERT INTO events(project_id,task_id,type,detail) VALUES($1,$2,$3,$4)", [b.project_id,b.task_id,type,{message,...extra}]);
   const display = b => {
-    const { lease_token, source_files, candidate_files, ...safe } = b;
+    const { lease_token, source_files, candidate_files, attachment_context, ...safe } = b;
     return { ...safe, preview_url: b.snapshot_id && ["review","applied"].includes(b.status) ? previewUrl(b.snapshot_id) : null };
   };
   const expire = async () => tx(async c => {
@@ -86,7 +86,7 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
           await c.query("UPDATE builds SET status='running',lease_token=$2,claimed_at=now(),updated_at=now() WHERE id=$1",[b.id,lease]);
           await event(c,b,"TASK_STARTED","Build claimed by the external worker.");
           const history = (await c.query("SELECT prompt,summary FROM builds WHERE project_id=$1 AND status='applied' ORDER BY created_at DESC LIMIT 10", [b.project_id])).rows.reverse();
-          return {id:b.id,project_id:b.project_id,provider:b.provider,prompt:b.prompt,source_files:b.source_files,history,lease_token:lease};
+          return {id:b.id,project_id:b.project_id,provider:b.provider,prompt:b.prompt,source_files:b.source_files,attachments:b.attachment_context,history,lease_token:lease};
         });
         json(res,200,{build}); return true;
       }
@@ -148,13 +148,17 @@ export function createBuildService({ pool, workerToken, publishSnapshot, removeS
       const providerId=body.provider || 'openai';
       if(!providerDefinitions.some(item=>item.id===providerId)) throw invalid('Choose a supported provider.');
       const agent=await status(providerId); if(!agent.available) throw invalid(agent.reason,503);
+      const attachmentIds = body.attachment_ids || [];
+      if (!Array.isArray(attachmentIds) || attachmentIds.length > 20 || attachmentIds.some(id => typeof id !== 'string' || !uuid.test(id)) || new Set(attachmentIds).size !== attachmentIds.length)
+        throw invalid('Select valid project attachments.');
+      const attachmentContext = await readAttachmentContext(projectId, attachmentIds);
       const build=await tx(async c => {
         await lockProject(c,projectId);
         if((await c.query("SELECT id FROM builds WHERE project_id=$1 AND status IN ('queued','running','review')",[projectId])).rowCount) throw invalid("Finish or cancel the existing active build first.",409);
         const files=(await c.query("SELECT path,content,version FROM files WHERE project_id=$1 ORDER BY path",[projectId])).rows;
         const task=randomUUID(),id=randomUUID();
         await c.query("INSERT INTO tasks(id,project_id,kind,status) VALUES($1,$2,'agent-build','running')",[task,projectId]);
-        const b=(await c.query("INSERT INTO builds(id,project_id,task_id,status,prompt,base_versions,source_files,provider) VALUES($1,$2,$3,'queued',$4,$5,$6,$7) RETURNING *",[id,projectId,task,prompt,versions(files),JSON.stringify(files),providerId])).rows[0];
+        const b=(await c.query("INSERT INTO builds(id,project_id,task_id,status,prompt,base_versions,source_files,provider,attachment_ids,attachment_context) VALUES($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9) RETURNING *",[id,projectId,task,prompt,versions(files),JSON.stringify(files),providerId,JSON.stringify(attachmentIds),JSON.stringify(attachmentContext)])).rows[0];
         await event(c,b,"BUILD_QUEUED","Build request queued for the external worker."); return display(b);
       });
       json(res,201,{build}); return true;
